@@ -1,111 +1,106 @@
-# AI Assistant
+# AURELIS — Private Intelligence
 
-An AI-powered assistant application.
+A premium, futuristic AI assistant interface. AURELIS is a dark, cinematic
+"private intelligence layer" — a product that reads as an operating system for
+thought rather than a chat window with bubbles.
 
-> **Note:** This repository is currently in its initial setup phase. The sections
-> below describe the intended project structure and usage. Update them as the
-> codebase grows.
+The application is a fully interactive frontend. The model layer is simulated
+locally by a deterministic response engine, so every surface can be exercised
+without a backend.
 
-## Overview
+## Stack
 
-AI Assistant is a project for building an intelligent, conversational assistant
-that can understand natural-language requests and act on them. It is intended to
-be extensible, so new capabilities (tools, integrations, and models) can be
-plugged in without major refactoring.
+- **React 18** + **TypeScript** (strict)
+- **Vite 5** for dev and build
+- **Tailwind CSS** with a custom design-token layer
+- **Framer Motion** for all motion
+- **Lucide React** for icons
 
-## Features
-
-- Conversational interface for natural-language interaction
-- Pluggable model / LLM backend
-- Extensible tool and integration system
-- Configurable assistant behavior and personas
-- Simple setup for local development
-
-## Getting Started
-
-### Prerequisites
-
-- Git
-- A supported runtime for the chosen implementation (e.g. Python 3.10+ or Node.js 18+)
-- An API key for your preferred LLM provider
-
-### Installation
+## Getting started
 
 ```bash
-# Clone the repository
-git clone https://github.com/ramdhanumuri/AI-assistant.git
-cd AI-assistant
-
-# Create and activate a virtual environment (Python example)
-python -m venv .venv
-source .venv/bin/activate    # On Windows: .venv\Scripts\activate
-
-# Install dependencies (adjust to the project's dependency file)
-pip install -r requirements.txt
+npm install
+npm run dev      # http://localhost:12000
 ```
 
-### Configuration
-
-Configuration is supplied through environment variables. Create a `.env` file in
-the project root (and keep it out of version control):
-
-```env
-# Example — replace with the variables your implementation actually uses
-LLM_API_KEY=your-api-key-here
-LLM_MODEL=gpt-4o-mini
-```
-
-### Running
+Other scripts:
 
 ```bash
-# Example entry point — adjust once the application code is added
-python main.py
+npm run build      # typecheck + production bundle
+npm run preview    # serve the production build
+npm run typecheck  # tsc --noEmit
 ```
 
-## Project Structure
+No environment variables are required — there is no backend dependency.
+
+## Experience map
+
+| View | Purpose |
+| --- | --- |
+| **Intelligence Home** | Cinematic hero, the AI Core orb, mode grid, active workstreams, recent threads |
+| **Conversation** | Spatial thread view with rich, block-based assistant responses |
+| **Voice** | Full-screen voice environment: listening / thinking / responding |
+| **Intelligence Overview** | Metrics, throughput chart, mode distribution, knowledge sources, memory |
+| **Knowledge / Tools / Memory / Projects** | Surfaces for the assistant's context layer |
+| **Command Center** | Cmd/Ctrl-K control layer with fuzzy search and keyboard navigation |
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Cmd/Ctrl + K` | Toggle Command Center |
+| `Cmd/Ctrl + Enter` | Send message |
+| `Cmd/Ctrl + M` | Toggle voice capture |
+| `Cmd/Ctrl + B` | Toggle sidebar |
+| `Cmd/Ctrl + N` | New conversation |
+| `Esc` | Close overlay / exit voice |
+| Up, Down, Enter | Navigate and run Command Center results |
+
+## Architecture
 
 ```
-AI-assistant/
-├── README.md          # Project documentation
-├── .gitignore         # Files excluded from version control
-└── ...                # Application source, tests, and configuration
+src/
+├── App.tsx                      # Shell: background, boot sequence, router, toasts
+├── components/
+│   ├── AIOrb.tsx                # Layered AI Core — geometry, rings, particles, bars
+│   ├── AmbientBackground.tsx    # Atmospheric light, grain, grid, ParticleField
+│   ├── BootSequence.tsx         # Intro: light → core → ring → identity → reveal
+│   ├── Message.tsx / MessageBlocks.tsx   # Rich response rendering
+│   ├── CommandBar.tsx           # Glass input: voice, attach, tools, model, send
+│   ├── CommandCenter.tsx        # Cmd/Ctrl-K overlay
+│   ├── ModeSelector.tsx         # Seven intelligence modes
+│   ├── Primitives.tsx           # GlassCard, Button (magnetic), StatusPill, …
+│   └── Sidebar.tsx, TopNavigation.tsx, SettingsPanel.tsx
+├── features/
+│   ├── LandingHero.tsx          # Hero, modes, workstreams
+│   ├── ChatInterface.tsx        # Conversation workspace
+│   ├── VoiceInterface.tsx       # Voice session state machine
+│   ├── IntelligenceDashboard.tsx
+│   └── SystemSurfaces.tsx       # Knowledge, Tools, Memory, Projects
+├── state/AppContext.tsx         # Single app state layer and orchestration
+├── data/mock.ts                 # Modes, tools, conversations, projects, metrics
+├── lib/engine.ts                # Deterministic response synthesis and streaming
+├── lib/utils.ts                 # cx, rgba, seeded RNG, motion helpers
+└── styles/globals.css           # Design tokens, glass utilities, grain, scrollbars
 ```
 
-## Usage
+### Design system
 
-Once running, interact with the assistant through its interface (CLI, web, or
-API). Typical flow:
+Tokens live in `tailwind.config.ts` and `globals.css`: an obsidian-to-titanium
+neutral ramp, platinum text tiers, a restrained champagne accent, and a soft
+electric-blue aura that shifts per intelligence mode. Depth comes from layered
+glass surfaces, inset highlights, and ambient radial light rather than heavy
+borders or saturated gradients.
 
-1. Start the application.
-2. Send a prompt or question.
-3. The assistant processes the request, optionally using tools, and returns a response.
+## Accessibility
 
-## Roadmap
+- Full keyboard operability, including the Command Center and a skip link
+- Visible focus rings; semantic landmarks and ARIA labelling on controls
+- `prefers-reduced-motion` respected, plus an in-app motion toggle
+- Live regions for toasts and streaming state
 
-- [ ] Define core assistant architecture
-- [ ] Add LLM provider integration
-- [ ] Add tool / plugin system
-- [ ] Add conversation memory
-- [ ] Add tests and CI
-- [ ] Add deployment documentation
+## Notes
 
-## Contributing
-
-Contributions are welcome.
-
-1. Fork the repository.
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Commit your changes: `git commit -m "Add my feature"`
-4. Push the branch: `git push origin feature/my-feature`
-5. Open a pull request.
-
-Please keep commits focused and describe the reasoning behind non-obvious changes.
-
-## License
-
-No license has been specified yet. Add a `LICENSE` file to define the terms under
-which this project may be used.
-
-## Contact
-
-Maintainer: [@ramdhanumuri](https://github.com/ramdhanumuri)
+Responses are generated locally from the prompt by `src/lib/engine.ts`.
+Exchanging the simulator for a real model means replacing that one module — the
+state layer and every view consume its streaming interface unchanged.
