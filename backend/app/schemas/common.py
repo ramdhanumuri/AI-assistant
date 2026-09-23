@@ -111,3 +111,6 @@ class HealthResponse(APIModel):
     env: str
     database: str
     version: str
+    # MODULE 3: reported but never fatal — an unconfigured or unreachable
+    # Supabase project must not fail the SQLAlchemy-backed readiness contract.
+    supabase: str = "unconfigured"

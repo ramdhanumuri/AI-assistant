@@ -6,3 +6,10 @@ pydantic>=2.13,<3.0
 pydantic-settings>=2.15,<3.0
 pytest>=8.4,<9.0
 httpx>=0.28,<1.0
+# PostgreSQL driver for the Supabase / Postgres deployment target (MODULE 3).
+# psycopg 3 is the SQLAlchemy 2.0 "psycopg" dialect, used as
+# postgresql+psycopg://. Binary wheel avoids needing libpq headers to build.
+psycopg[binary]>=3.2,<4.0
+# Test-only: parses supabase/migrations/*.sql with the real PostgreSQL grammar
+# (libpg_query) so a syntax error fails CI instead of the dashboard.
+pglast>=8.4,<9.0

@@ -54,6 +54,7 @@ curl localhost:12001/api/v1/health/ready
 | `app/services/engine/` | `simulator` provider; MODULE 6 adds a real one |
 | `app/db/` | Session handling and seed data |
 | `alembic/` | Schema migrations |
+| `supabase/` | Postgres/Supabase migrations, RLS and deployment notes (MODULE 3) |
 | `tests/` | Contract, behaviour and migration tests |
 
 ## Notes for later modules
@@ -67,3 +68,7 @@ curl localhost:12001/api/v1/health/ready
 - **Migrations.** Add migrations rather than editing `0001`; that revision is
   only safe to amend while the schema is unreleased. `alembic revision
   --autogenerate` is checked for drift in `tests/test_migrations.py`.
+- **Supabase (MODULE 3).** Alembic stays authoritative for the ORM; the SQL in
+  `supabase/migrations/` mirrors it for Postgres/Supabase and is checked by
+  `tests/test_supabase.py`. RLS is enabled deny-by-default and MODULE 4 adds
+  the policies. See `supabase/README.md` before touching either.
