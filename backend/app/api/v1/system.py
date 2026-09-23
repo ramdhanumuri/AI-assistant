@@ -8,10 +8,17 @@ from fastapi import APIRouter
 from pydantic import Field
 
 from app.core.config import settings
+from app.db import supabase
 from app.schemas.common import APIModel
 from app.services.engine import list_providers
 
 router = APIRouter(prefix="/system", tags=["System"])
+
+
+class SupabaseInfo(APIModel):
+    configured: bool
+    url: str | None = None
+    service_role_configured: bool = False
 
 
 class SystemInfo(APIModel):
@@ -21,6 +28,7 @@ class SystemInfo(APIModel):
     ai_provider: str
     ai_model: str | None = None
     available_providers: list[str] = Field(default_factory=list)
+    supabase: SupabaseInfo
     docs_url: str
 
 
@@ -33,5 +41,6 @@ def info() -> SystemInfo:
         ai_provider=settings.AI_PROVIDER,
         ai_model=settings.AI_MODEL or None,
         available_providers=list_providers(),
+        supabase=SupabaseInfo(**supabase.client_info()),
         docs_url="/docs",
     )

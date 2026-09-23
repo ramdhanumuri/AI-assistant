@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite:///./aurelis.db"
 
+    # Supabase (MODULE 3). These are consumed by the REST/Realtime layer and by
+    # the readiness probe; SQLAlchemy keeps talking to DATABASE_URL directly.
+    # The service-role key bypasses Row Level Security, so it is server-only
+    # and must never be shipped to the browser.
+    SUPABASE_URL: str = ""
+    SUPABASE_ANON_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
+
     # Model layer (seam resolved in MODULE 6)
     AI_PROVIDER: str = "simulator"
     AI_MODEL: str = ""
@@ -51,6 +59,11 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")
+
+    @property
+    def is_supabase_configured(self) -> bool:
+        """True when the REST/Realtime layer has enough config to be used."""
+        return bool(self.SUPABASE_URL and self.SUPABASE_ANON_KEY)
 
 
 @lru_cache

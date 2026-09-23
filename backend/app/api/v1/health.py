@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from app.api.deps import DbSession
 from app.core.config import settings
+from app.db import supabase
 from app.schemas.common import HealthResponse
 
 router = APIRouter(tags=["Health"])
@@ -41,10 +42,15 @@ def readiness(db: DbSession, response: Response) -> HealthResponse:
         database = "unavailable"
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
+    # Supabase is probed for visibility only; SQLAlchemy is the path the API
+    # serves traffic from, so this never decides readiness.
+    supabase_state = supabase.probe()
+
     return HealthResponse(
         status="ok" if database == "ok" else "degraded",
         app=settings.APP_NAME,
         env=settings.APP_ENV,
         database=database,
         version=VERSION,
+        supabase=supabase_state,
     )
