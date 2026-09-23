@@ -1,0 +1,22 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# Local secrets and the development database
+.env
+*.db
+*.sqlite3
+
+# The template is not a secret and is referenced by the README, but the
+# root .gitignore's `.env.*` rule would otherwise swallow it.
+!.env.example
+
+# Local logs
+*.log

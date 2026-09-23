@@ -2,9 +2,9 @@
 
 ## Project
 
-AURELIS — a premium dark-luxury AI assistant frontend. React 18 + TypeScript +
-Vite 5 + Tailwind + Framer Motion + Lucide. No backend: the model layer is a
-deterministic local simulator in `src/lib/engine.ts`.
+AURELIS — a premium dark-luxury AI assistant. React 18 + TypeScript + Vite 5 +
+Tailwind + Framer Motion + Lucide on the frontend; FastAPI on the backend. Both
+model layers are deterministic local simulators, not real LLMs.
 
 ## Commands
 
@@ -15,6 +15,42 @@ npm run typecheck  # tsc --noEmit
 ```
 
 Always typecheck before considering work done. `npm run build` runs it too.
+
+## Backend (MODULE 2) - `backend/`
+
+FastAPI + SQLAlchemy 2.0 + Alembic + Pydantic v2 + SQLite. The model layer is a
+deterministic simulator (`backend/app/services/engine/simulator.py`), not a real
+LLM. Port 12001.
+
+```bash
+cd backend
+python run.py                  # uvicorn on 0.0.0.0:12001, reload on
+alembic upgrade head           # create the schema
+python -m app.db.seed          # load reference + demo data
+pytest                         # 90 tests
+```
+
+### API contract - read before touching schemas
+
+`src/types.ts` is authoritative; the backend adapts to the frontend, never the
+reverse. Two rules that are easy to get wrong:
+
+- **Timestamps the UI does arithmetic on are epoch milliseconds** (`updatedAt`,
+  `lastMessageAt`, `createdAt`, ...), not ISO strings. `formatRelative(ts: number)`
+  renders `NaN` against a string.
+- **Three fields the UI prints verbatim are pre-formatted relative strings**
+  (`activity.at`, `knowledge.updated`, `memory.learned`). The columns behind them
+  stay real datetimes and the wording is derived on read - see `_relative_label`
+  in `backend/app/schemas/common.py`. Do not store "4 min ago".
+
+Request bodies accept both spellings (`mode`/`modeId`, `project`/`projectId`) via
+`AliasChoices`, so existing frontend calls keep working; responses emit the
+frontend's name only. `backend/tests/test_contract.py` freezes all of this - a
+rename there is a deliberate, tested change, not a refactor.
+
+`alembic/versions/0001` is only safe to amend while the schema is unreleased.
+Once something depends on it, add a new migration instead. Drift is checked in
+`backend/tests/test_migrations.py`.
 
 ## Dev-server proxy
 
