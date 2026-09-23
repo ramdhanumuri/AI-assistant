@@ -1,0 +1,21 @@
+[project]
+name = "aurelis-backend"
+version = "2.0.0"
+description = "AURELIS Intelligence API — Module 2 backend foundation"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers"
+filterwarnings = [
+    # Starlette 1.6 warns that its TestClient routes through the httpx 1.x
+    # shim. Upstream-only: the client behaves correctly, and tracking httpx2
+    # is a dependency decision, not a defect in this codebase.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning",
+    # Starlette's import of anyio's deprecated BlockingPortal alias.
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+]
+markers = [
+    "integration: exercises the API through a real HTTP client and database",
+]
