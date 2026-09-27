@@ -18,12 +18,14 @@ const VIEW_TITLES: Record<string, { title: string; caption: string }> = {
   projects: { title: 'Projects', caption: 'Active workstreams' },
 };
 
-export function TopNavigation() {
+export function TopNavigation({ meta: metaOverride }: { meta?: { title: string; caption: string } } = {}) {
   const { view, mode, aiState, settings, isStreaming, liveTokens } = useApp();
   const mod = useModLabel();
   const [clock, setClock] = useState(() => formatClock());
   const active = MODE_BY_ID[mode];
-  const meta = VIEW_TITLES[view] ?? VIEW_TITLES.home;
+  /* Routes that live outside the view system (/profile, /admin) pass their own
+     heading; otherwise it is derived from the current view. */
+  const meta = metaOverride ?? VIEW_TITLES[view] ?? VIEW_TITLES.home;
 
   useEffect(() => {
     const t = window.setInterval(() => setClock(formatClock()), 15_000);

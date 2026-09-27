@@ -2,8 +2,15 @@ fastapi>=0.141,<1.0
 uvicorn[standard]>=0.53,<1.0
 sqlalchemy>=2.0.54,<2.1
 alembic>=1.20,<2.0
-pydantic>=2.13,<3.0
+# The `email` extra provides email-validator, which `pydantic.EmailStr` (used
+# for every email field) imports lazily. Without it the app fails at import.
+pydantic[email]>=2.13,<3.0
 pydantic-settings>=2.15,<3.0
+# Password hashing (Argon2id) and access-token signing. These were imported by
+# app/core/security.py from the start but missing from this file, so a clean
+# install could not import the app.
+argon2-cffi>=23.1,<26.0
+PyJWT>=2.10,<3.0
 pytest>=8.4,<9.0
 httpx>=0.28,<1.0
 # PostgreSQL driver for the Supabase / Postgres deployment target (MODULE 3).

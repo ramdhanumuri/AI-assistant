@@ -1,6 +1,8 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { AppProvider, useApp } from '@/state/AppContext';
+import { AuthProvider, useAuth } from '@/state/AuthContext';
+import { RouterProvider, useRouter } from '@/lib/router';
 import { MODE_BY_ID } from '@/data/mock';
 import { cx, rgba } from '@/lib/utils';
 import { AmbientBackground } from '@/components/AmbientBackground';
@@ -19,6 +21,19 @@ import {
   ProjectsSurface,
   ToolsSurface,
 } from '@/features/SystemSurfaces';
+import { LoginScreen } from '@/features/auth/LoginScreen';
+import { RegisterScreen } from '@/features/auth/RegisterScreen';
+import { ForgotPasswordScreen, ResetPasswordScreen } from '@/features/auth/PasswordScreens';
+import { ProfileScreen } from '@/features/auth/ProfileScreen';
+import {
+  AuthLoadingScreen,
+  NotFoundScreen,
+  RequireAdmin,
+  RequireAuth,
+  RequireGuest,
+} from '@/features/auth/Guards';
+import { AdminDashboard } from '@/features/admin/AdminDashboard';
+import { PublicHome } from '@/features/PublicHome';
 
 const VARIANT_BY_VIEW = {
   home: 'home',
@@ -31,7 +46,15 @@ const VARIANT_BY_VIEW = {
   projects: 'system',
 } as const;
 
-function AppShell() {
+function AppShell({
+  children,
+  meta,
+}: {
+  /** Replaces the view switch. Used by /profile and /admin, which are real
+   *  routes rather than entries in the in-app `view` state. */
+  children?: ReactNode;
+  meta?: { title: string; caption: string };
+}) {
   const { view, mode, aiState, settings, sidebarOpen, toasts } = useApp();
   const active = MODE_BY_ID[mode];
   const [booted, setBooted] = useState(false);
@@ -70,26 +93,30 @@ function AppShell() {
         <Sidebar />
 
         <div className="relative flex h-full min-w-0 flex-1 flex-col">
-          <TopNavigation />
+          <TopNavigation meta={meta} />
 
           <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
-                key={view}
+                key={children ? (meta?.title ?? 'custom') : view}
                 initial={{ opacity: 0, y: 14, filter: 'blur(10px)' }}
                 animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
                 exit={{ opacity: 0, y: -10, filter: 'blur(10px)' }}
                 transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-                className="flex min-h-0 flex-1 flex-col"
+                className={cx('flex min-h-0 flex-1 flex-col', children ? 'overflow-y-auto' : undefined)}
               >
-                {view === 'home' && <LandingHero />}
-                {view === 'conversation' && <ChatInterface />}
-                {view === 'voice' && <VoiceInterface />}
-                {view === 'dashboard' && <IntelligenceDashboard />}
-                {view === 'knowledge' && <KnowledgeSurface />}
-                {view === 'tools' && <ToolsSurface />}
-                {view === 'memory' && <MemorySurface />}
-                {view === 'projects' && <ProjectsSurface />}
+                {children ?? (
+                  <>
+                    {view === 'home' && <LandingHero />}
+                    {view === 'conversation' && <ChatInterface />}
+                    {view === 'voice' && <VoiceInterface />}
+                    {view === 'dashboard' && <IntelligenceDashboard />}
+                    {view === 'knowledge' && <KnowledgeSurface />}
+                    {view === 'tools' && <ToolsSurface />}
+                    {view === 'memory' && <MemorySurface />}
+                    {view === 'projects' && <ProjectsSurface />}
+                  </>
+                )}
               </motion.div>
             </AnimatePresence>
           </main>
@@ -130,6 +157,104 @@ function AppShell() {
       )}
     </div>
   );
+}
+
+/** `/settings` is a route over the existing settings overlay: land on the chat
+ *  surface and open the panel, so there is one implementation, not two. */
+function SettingsRoute() {
+  const { setSettingsOpen, setView } = useApp();
+
+  useEffect(() => {
+    setView('conversation');
+    setSettingsOpen(true);
+  }, [setSettingsOpen, setView]);
+
+  return <ChatInterface />;
+}
+
+/** Signed-in users landing on `/` belong in the workspace, not on the pitch. */
+function HomeRoute() {
+  const { status } = useAuth();
+  const { navigate } = useRouter();
+
+  useEffect(() => {
+    if (status === 'authenticated') navigate('/chat', { replace: true });
+  }, [status, navigate]);
+
+  if (status === 'loading' || status === 'authenticated') return <AuthLoadingScreen />;
+  return <PublicHome />;
+}
+
+function Routes() {
+  const { path } = useRouter();
+
+  switch (path) {
+    case '/':
+      return <HomeRoute />;
+
+    case '/login':
+      return (
+        <RequireGuest>
+          <LoginScreen />
+        </RequireGuest>
+      );
+
+    case '/register':
+      return (
+        <RequireGuest>
+          <RegisterScreen />
+        </RequireGuest>
+      );
+
+    /* Signed-out pages by nature; RequireGuest keeps a signed-in visitor from
+       sitting on a reset form that would revoke their own sessions. */
+    case '/forgot-password':
+      return (
+        <RequireGuest>
+          <ForgotPasswordScreen />
+        </RequireGuest>
+      );
+
+    case '/reset-password':
+      return <ResetPasswordScreen />;
+
+    case '/chat':
+      return (
+        <RequireAuth>
+          <AppShell />
+        </RequireAuth>
+      );
+
+    case '/profile':
+      return (
+        <RequireAuth>
+          <AppShell meta={{ title: 'Profile', caption: 'Account & security' }}>
+            <ProfileScreen />
+          </AppShell>
+        </RequireAuth>
+      );
+
+    case '/settings':
+      return (
+        <RequireAuth>
+          <AppShell meta={{ title: 'Preferences', caption: 'Interface & behaviour' }}>
+            <SettingsRoute />
+          </AppShell>
+        </RequireAuth>
+      );
+
+    case '/admin':
+      return (
+        <RequireAdmin>
+          <AppShell meta={{ title: 'Administration', caption: 'Platform control' }}>
+            <AdminDashboard />
+          </AppShell>
+        </RequireAdmin>
+      );
+
+    default:
+      return <NotFoundScreen />;
+  }
 }
 
 function ToastStack({
@@ -173,8 +298,12 @@ function ToastStack({
 
 export default function App() {
   return (
-    <AppProvider>
-      <AppShell />
-    </AppProvider>
+    <RouterProvider>
+      <AuthProvider>
+        <AppProvider>
+          <Routes />
+        </AppProvider>
+      </AuthProvider>
+    </RouterProvider>
   );
 }

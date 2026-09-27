@@ -22,11 +22,18 @@ class AppError(Exception):
     status_code: int = status.HTTP_400_BAD_REQUEST
     code: str = "app_error"
 
-    def __init__(self, message: str, *, code: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         if code:
             self.code = code
+        self.headers = headers or {}
 
 
 class NotFoundError(AppError):
@@ -47,6 +54,81 @@ class InvalidRequestError(AppError):
 class ServiceUnavailableError(AppError):
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     code = "service_unavailable"
+
+
+# ── Authentication and authorization (MODULE 4) ───────────────────────
+#
+# Kept distinct on purpose. `AuthenticationError` answers "who are you?" and
+# carries a `WWW-Authenticate` challenge; `AuthorizationError` answers "you are
+# known, but not allowed" and must never be used where the real problem is a
+# missing credential — collapsing the two would tell a prober whether a token
+# was absent or merely insufficient.
+
+
+class AuthenticationError(AppError):
+    """No valid credential was presented (or it has expired)."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+    code = "authentication_error"
+
+    def __init__(
+        self,
+        message: str = "Authentication required.",
+        *,
+        code: str | None = None,
+        scheme: str = "Bearer",
+        reason: str = "invalid_token",
+    ) -> None:
+        super().__init__(
+            message,
+            code=code,
+            headers={"WWW-Authenticate": f'{scheme} error="{reason}"'},
+        )
+        self.reason = reason
+
+
+class ExpiredAuthenticationError(AuthenticationError):
+    """The credential was valid but its lifetime has ended.
+
+    A distinct code lets the SPA attempt exactly one silent refresh before
+    falling back to the login screen.
+    """
+
+    code = "session_expired"
+
+    def __init__(self, message: str = "Your session has expired.") -> None:
+        super().__init__(message, scheme="Bearer", reason="token_expired")
+
+
+class AuthorizationError(AppError):
+    """Authenticated, but not permitted to perform this action."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    code = "authorization_error"
+
+
+class AccountInactiveError(AppError):
+    """The account exists but is disabled; it must not hold a session."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    code = "account_inactive"
+
+
+class EmailAlreadyRegisteredError(AppError):
+    status_code = status.HTTP_409_CONFLICT
+    code = "email_already_registered"
+
+
+class RateLimitedError(AppError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    code = "rate_limited"
+
+    def __init__(self, message: str, *, retry_after_seconds: int) -> None:
+        super().__init__(
+            message,
+            headers={"Retry-After": str(max(1, retry_after_seconds))},
+        )
+        self.retry_after_seconds = retry_after_seconds
 
 
 def _payload(code: str, message: str) -> dict[str, object]:
@@ -75,6 +157,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_payload(exc.code, exc.message),
+            headers=exc.headers or None,
         )
 
     @app.exception_handler(RequestValidationError)

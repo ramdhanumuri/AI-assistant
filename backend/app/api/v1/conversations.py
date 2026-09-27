@@ -1,15 +1,20 @@
 """Conversation and message endpoints.
 
-This is the write path the chat surface will use: create a thread, post a
-turn, read the transcript. The assistant's reply is generated server-side by
-the engine seam, so the client never synthesises content.
+This is the write path the chat surface uses: create a thread, post a turn,
+read the transcript. The assistant's reply is generated server-side by the
+engine seam, so the client never synthesises content.
+
+Every route depends on `CurrentUser`, and the owner id comes from that identity
+— never from the request. A thread belonging to someone else is reported as
+404, not 403, so the API does not confirm that another account's id exists.
 """
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Request, status
 
-from app.api.deps import ConversationServiceDep, Pagination, page
+from app.api.cookies import enforce_csrf
+from app.api.deps import ConversationServiceDep, CurrentUser, Pagination, page
 from app.schemas.common import Page
 from app.schemas.conversation import (
     ConversationCreate,
@@ -22,10 +27,18 @@ from app.schemas.conversation import (
 
 router = APIRouter(prefix="/conversations", tags=["Conversations"])
 
+AUTH_RESPONSES = {401: {"description": "Authentication required"}}
 
-@router.get("", response_model=Page[ConversationRead], summary="List conversations")
+
+@router.get(
+    "",
+    response_model=Page[ConversationRead],
+    summary="List conversations",
+    responses=AUTH_RESPONSES,
+)
 def list_conversations(
     service: ConversationServiceDep,
+    identity: CurrentUser,
     pagination: Pagination,
     include_archived: Annotated[
         bool, Query(alias="includeArchived", description="Include archived threads.")
@@ -42,6 +55,7 @@ def list_conversations(
     ] = None,
 ) -> Page[ConversationRead]:
     rows, total = service.list_conversations(
+        owner_id=identity.id,
         include_archived=include_archived,
         pinned=pinned,
         project_id=project_id,
@@ -60,27 +74,50 @@ def list_conversations(
     response_model=ConversationRead,
     status_code=status.HTTP_201_CREATED,
     summary="Create a conversation",
+    responses=AUTH_RESPONSES,
 )
 def create_conversation(
-    payload: ConversationCreate, service: ConversationServiceDep
+    payload: ConversationCreate,
+    request: Request,
+    service: ConversationServiceDep,
+    identity: CurrentUser,
 ) -> ConversationRead:
-    return ConversationRead.model_validate(service.create(payload))
+    enforce_csrf(request)
+    # The owner comes from the session, so a client cannot create a thread on
+    # another account's behalf.
+    return ConversationRead.model_validate(service.create(payload, owner_id=identity.id))
 
 
-@router.get("/{conversation_id}", response_model=ConversationRead, summary="Get a conversation")
+@router.get(
+    "/{conversation_id}",
+    response_model=ConversationRead,
+    summary="Get a conversation",
+    responses={404: {"description": "Not found, or not owned by the caller"}},
+)
 def get_conversation(
-    conversation_id: str, service: ConversationServiceDep
+    conversation_id: str, service: ConversationServiceDep, identity: CurrentUser
 ) -> ConversationRead:
-    return ConversationRead.model_validate(service.get_or_404(conversation_id))
+    return ConversationRead.model_validate(
+        service.get_or_404(conversation_id, owner_id=identity.id)
+    )
 
 
-@router.patch("/{conversation_id}", response_model=ConversationRead, summary="Update a conversation")
+@router.patch(
+    "/{conversation_id}",
+    response_model=ConversationRead,
+    summary="Update a conversation",
+)
 def update_conversation(
     conversation_id: str,
     payload: ConversationUpdate,
+    request: Request,
     service: ConversationServiceDep,
+    identity: CurrentUser,
 ) -> ConversationRead:
-    return ConversationRead.model_validate(service.update(conversation_id, payload))
+    enforce_csrf(request)
+    return ConversationRead.model_validate(
+        service.update(conversation_id, payload, owner_id=identity.id)
+    )
 
 
 @router.delete(
@@ -88,8 +125,14 @@ def update_conversation(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a conversation and its messages",
 )
-def delete_conversation(conversation_id: str, service: ConversationServiceDep) -> None:
-    service.delete(conversation_id)
+def delete_conversation(
+    conversation_id: str,
+    request: Request,
+    service: ConversationServiceDep,
+    identity: CurrentUser,
+) -> None:
+    enforce_csrf(request)
+    service.delete(conversation_id, owner_id=identity.id)
 
 
 @router.get(
@@ -98,10 +141,16 @@ def delete_conversation(conversation_id: str, service: ConversationServiceDep) -
     summary="Read a conversation transcript",
 )
 def list_messages(
-    conversation_id: str, service: ConversationServiceDep, pagination: Pagination
+    conversation_id: str,
+    service: ConversationServiceDep,
+    identity: CurrentUser,
+    pagination: Pagination,
 ) -> Page[MessageRead]:
     rows, total = service.list_messages(
-        conversation_id, limit=pagination.limit, offset=pagination.offset
+        conversation_id,
+        owner_id=identity.id,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
     return Page[MessageRead](
         **page([MessageRead.model_validate(r) for r in rows], total, pagination)
@@ -115,10 +164,15 @@ def list_messages(
     summary="Post a turn and receive the assistant's reply",
 )
 def post_message(
-    conversation_id: str, payload: MessageCreate, service: ConversationServiceDep
+    conversation_id: str,
+    payload: MessageCreate,
+    request: Request,
+    service: ConversationServiceDep,
+    identity: CurrentUser,
 ) -> TurnResult:
+    enforce_csrf(request)
     user_message, assistant_message, conversation = service.post_message(
-        conversation_id, payload
+        conversation_id, payload, owner_id=identity.id
     )
     return TurnResult(
         user_message=MessageRead.model_validate(user_message),

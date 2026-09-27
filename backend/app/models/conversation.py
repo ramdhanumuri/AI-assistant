@@ -36,6 +36,14 @@ class Conversation(Base, TimestampMixin):
     project_id: Mapped[str | None] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # MODULE 4: the account that owns this thread. Nullable so the MODULE 2
+    # demo rows remain valid; NULL is treated as "not owned by anyone" and is
+    # therefore invisible to every authenticated user. New rows always carry an
+    # owner. `ondelete=CASCADE` means deleting an account takes its threads
+    # (and, transitively, their messages) with it.
+    owner_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

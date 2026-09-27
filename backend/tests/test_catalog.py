@@ -1,10 +1,23 @@
-"""Catalog, dashboard and engine-seam tests."""
+"""Catalog, dashboard and engine-seam tests.
+
+MODULE 4: the catalog and dashboard routes require a session, and the parts
+that describe the caller's own content are owner-scoped. Memory records and
+project thread counts are per-account; the reference data (modes, knowledge,
+tools, the weekly usage series) is shared and stays global.
+"""
 
 from fastapi.testclient import TestClient
 
 from app.services.engine import get_engine, list_providers
 from app.services.engine.base import EngineRequest, Engine
 from app.services.engine.simulator import token_estimate
+
+
+def _new_thread(client: TestClient, **overrides) -> dict:
+    payload = {"title": "Scoped thread", **overrides}
+    response = client.post("/api/v1/conversations", json=payload)
+    assert response.status_code == 201, response.text
+    return response.json()
 
 
 class TestModes:
@@ -26,11 +39,18 @@ class TestModes:
 
 
 class TestProjects:
-    def test_thread_counts_reflect_conversations(self, client: TestClient) -> None:
+    def test_thread_counts_reflect_the_callers_conversations(self, client: TestClient) -> None:
+        """Counts are per-account, so the seeded demo threads do not show up."""
+        projects = {p["id"]: p for p in client.get("/api/v1/projects").json()}
+        assert all(p["threads"] == 0 for p in projects.values())
+
+        _new_thread(client, projectId="p-atlas")
+        _new_thread(client, projectId="p-atlas")
+        _new_thread(client, projectId="p-helios")
         projects = {p["id"]: p for p in client.get("/api/v1/projects").json()}
         assert projects["p-atlas"]["threads"] == 2
         assert projects["p-helios"]["threads"] == 1
-        assert projects["p-ops"]["threads"] == 1
+        assert projects["p-ops"]["threads"] == 0
 
     def test_create_project(self, client: TestClient) -> None:
         response = client.post(
@@ -86,12 +106,28 @@ class TestTools:
 
 
 class TestMemory:
-    def test_seeded_records_are_ordered_by_confidence(self, client: TestClient) -> None:
+    def test_seeded_demo_memories_are_not_served(self, client: TestClient) -> None:
+        """The Module 2 memory rows are unowned reference data, not the user's."""
+        assert client.get("/api/v1/memory").json() == []
+
+    def test_records_are_ordered_by_confidence(self, client: TestClient) -> None:
+        for confidence in (0.4, 0.9, 0.65):
+            client.post(
+                "/api/v1/memory",
+                json={"statement": f"Fact at {confidence}", "confidence": confidence},
+            )
         records = client.get("/api/v1/memory").json()
         confidences = [r["confidence"] for r in records]
         assert confidences == sorted(confidences, reverse=True)
 
     def test_scope_filter(self, client: TestClient) -> None:
+        client.post(
+            "/api/v1/memory",
+            json={"statement": "Writes in British spelling", "scope": "Style"},
+        )
+        client.post(
+            "/api/v1/memory", json={"statement": "Prefers terse output", "scope": "Other"}
+        )
         style = client.get("/api/v1/memory", params={"scope": "Style"}).json()
         assert len(style) == 1
         assert "British spelling" in style[0]["statement"]
@@ -125,9 +161,11 @@ class TestDashboard:
     def test_summary_aggregates_every_section(self, client: TestClient) -> None:
         body = client.get("/api/v1/dashboard/summary").json()
         stats = body["stats"]
-        assert stats["totalConversations"] == 8
-        assert stats["pinned"] == 2
-        assert stats["activeModes"] == 7
+        # Conversation-derived stats are per-account and start empty.
+        assert stats["totalConversations"] == 0
+        assert stats["pinned"] == 0
+        assert stats["activeModes"] == 0
+        # Shared reference data is unaffected by ownership.
         assert len(body["usage"]) == 7
         assert len(body["activity"]) == 5
         assert len(body["knowledge"]) == 5
@@ -143,12 +181,25 @@ class TestDashboard:
         assert after["totalConversations"] == before["totalConversations"] + 1
         assert after["totalMessages"] == before["totalMessages"] + 2
 
-    def test_message_total_matches_the_messages_table(self, client: TestClient, session) -> None:
-        """The denormalised counter must agree with the actual row count."""
+    def test_message_total_matches_owned_rows(self, client: TestClient, session) -> None:
+        """The denormalised counter must agree with the caller's actual rows.
+
+        Scoped to the owner on purpose: the table also holds the Module 2 demo
+        messages, and the dashboard must not count those for anyone.
+        """
         from app.models import Message
 
+        conversation = client.post("/api/v1/conversations", json={}).json()
+        client.post(
+            f"/api/v1/conversations/{conversation['id']}/messages", json={"body": "hello"}
+        )
         stats = client.get("/api/v1/dashboard/summary").json()["stats"]
-        assert stats["totalMessages"] == session.query(Message).count()
+        owned = (
+            session.query(Message)
+            .filter(Message.conversation_id == conversation["id"])
+            .count()
+        )
+        assert stats["totalMessages"] == owned == 2
 
 
 class TestEngineSeam:

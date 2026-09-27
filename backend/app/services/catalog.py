@@ -59,11 +59,16 @@ class CatalogService:
 
     # ── Projects ─────────────────────────────────────────────────────
 
-    def list_projects(self) -> list[ProjectRead]:
+    def list_projects(self, *, owner_id: str) -> list[ProjectRead]:
+        # Scoped to the caller: a global count would tell one user how many
+        # threads another user has attached to a workstream.
         thread_counts = dict(
             self.session.execute(
                 select(Conversation.project_id, func.count(Conversation.id))
-                .where(Conversation.project_id.is_not(None))
+                .where(
+                    Conversation.project_id.is_not(None),
+                    Conversation.owner_id == owner_id,
+                )
                 .group_by(Conversation.project_id)
             ).all()
         )
@@ -127,54 +132,66 @@ class CatalogService:
 
     # ── Memory ───────────────────────────────────────────────────────
 
-    def list_memory(self, *, scope: str | None = None) -> list[MemoryRecord]:
-        query = select(MemoryRecord)
+    def list_memory(self, *, owner_id: str, scope: str | None = None) -> list[MemoryRecord]:
+        query = select(MemoryRecord).where(MemoryRecord.owner_id == owner_id)
         if scope:
             query = query.where(MemoryRecord.scope == scope)
         query = query.order_by(MemoryRecord.confidence.desc(), MemoryRecord.id)
         return list(self.session.scalars(query))
 
-    def create_memory(self, payload: MemoryRecordCreate) -> MemoryRecord:
+    def create_memory(self, payload: MemoryRecordCreate, *, owner_id: str) -> MemoryRecord:
         record = MemoryRecord(
             id=f"mem-{uuid4().hex[:12]}",
             statement=payload.statement,
             scope=payload.scope,
             confidence=payload.confidence,
             learned_at=utcnow(),
-            owner_id=None,
+            owner_id=owner_id,
         )
         self.session.add(record)
         self.session.commit()
         return record
 
-    def delete_memory(self, memory_id: str) -> None:
+    def delete_memory(self, memory_id: str, *, owner_id: str) -> None:
         record = self.session.get(MemoryRecord, memory_id)
-        if record is None:
+        if record is None or record.owner_id != owner_id:
+            # Someone else's record is reported as missing, not as forbidden.
             raise NotFoundError(f"Memory record '{memory_id}' not found.")
         self.session.delete(record)
         self.session.commit()
 
     # ── Dashboard ────────────────────────────────────────────────────
 
-    def summary(self) -> DashboardSummary:
+    def summary(self, *, owner_id: str) -> DashboardSummary:
+        """Aggregates over the caller's own conversations only.
+
+        Every count here is owner-scoped. The reference data (modes, knowledge,
+        tools, usage series) is shared and non-sensitive, so it stays global.
+        """
         total_conversations = int(
             self.session.scalar(
                 select(func.count())
                 .select_from(Conversation)
-                .where(Conversation.archived.is_(False))
+                .where(
+                    Conversation.archived.is_(False),
+                    Conversation.owner_id == owner_id,
+                )
             )
             or 0
         )
         total_messages = int(
             self.session.scalar(
-                select(func.coalesce(func.sum(Conversation.message_count), 0))
+                select(func.coalesce(func.sum(Conversation.message_count), 0)).where(
+                    Conversation.owner_id == owner_id
+                )
             )
             or 0
         )
         active_modes = int(
             self.session.scalar(
                 select(func.count(func.distinct(Conversation.mode_id))).where(
-                    Conversation.archived.is_(False)
+                    Conversation.archived.is_(False),
+                    Conversation.owner_id == owner_id,
                 )
             )
             or 0
@@ -183,7 +200,10 @@ class CatalogService:
             self.session.scalar(
                 select(func.count())
                 .select_from(Conversation)
-                .where(Conversation.pinned.is_(True))
+                .where(
+                    Conversation.pinned.is_(True),
+                    Conversation.owner_id == owner_id,
+                )
             )
             or 0
         )

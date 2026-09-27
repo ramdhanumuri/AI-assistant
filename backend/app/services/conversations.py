@@ -4,6 +4,11 @@ Owns the write path for a chat turn: persist the user message, ask the engine
 for a response, persist that too, and keep the conversation's denormalised
 counters in step — all inside one transaction. Routes stay thin and the engine
 stays free of persistence concerns.
+
+MODULE 4 makes every method owner-scoped. `owner_id` is a required keyword on
+each entry point and is pushed down into the query, so "not yours" and "does
+not exist" are the same 404 — a caller cannot probe for another account's
+thread ids by watching for 403s.
 """
 
 from __future__ import annotations
@@ -31,6 +36,10 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:12]}"
 
 
+def _not_found(conversation_id: str) -> NotFoundError:
+    return NotFoundError(f"Conversation '{conversation_id}' not found.")
+
+
 class ConversationService:
     def __init__(self, session: Session, engine: Engine | None = None) -> None:
         self.session = session
@@ -40,32 +49,35 @@ class ConversationService:
 
     # ── Reads ────────────────────────────────────────────────────────
 
-    def get_or_404(self, conversation_id: str) -> Conversation:
-        conversation = self.conversations.get(conversation_id)
+    def get_or_404(self, conversation_id: str, *, owner_id: str) -> Conversation:
+        conversation = self.conversations.get(conversation_id, owner_id=owner_id)
         if conversation is None:
-            raise NotFoundError(f"Conversation '{conversation_id}' not found.")
+            raise _not_found(conversation_id)
         return conversation
 
-    def list_conversations(self, **filters: object) -> tuple[list[Conversation], int]:
-        return self.conversations.list(**filters)  # type: ignore[arg-type]
+    def list_conversations(
+        self, *, owner_id: str, **filters: object
+    ) -> tuple[list[Conversation], int]:
+        return self.conversations.list(owner_id=owner_id, **filters)  # type: ignore[arg-type]
 
     def list_messages(
-        self, conversation_id: str, *, limit: int, offset: int
+        self, conversation_id: str, *, owner_id: str, limit: int, offset: int
     ) -> tuple[list[Message], int]:
-        self.get_or_404(conversation_id)
+        self.get_or_404(conversation_id, owner_id=owner_id)
         return self.messages.list_for_conversation(
             conversation_id, limit=limit, offset=offset
         )
 
     # ── Writes ───────────────────────────────────────────────────────
 
-    def create(self, payload: ConversationCreate) -> Conversation:
+    def create(self, payload: ConversationCreate, *, owner_id: str) -> Conversation:
         conversation = Conversation(
             id=_new_id("conv"),
             title=payload.title,
             preview="",
             mode_id=payload.mode,
             project_id=payload.project,
+            owner_id=owner_id,
             pinned=False,
             archived=False,
             message_count=0,
@@ -75,8 +87,10 @@ class ConversationService:
         self._commit()
         return conversation
 
-    def update(self, conversation_id: str, payload: ConversationUpdate) -> Conversation:
-        conversation = self.get_or_404(conversation_id)
+    def update(
+        self, conversation_id: str, payload: ConversationUpdate, *, owner_id: str
+    ) -> Conversation:
+        conversation = self.get_or_404(conversation_id, owner_id=owner_id)
         # Schema fields are named for the wire (`mode`, `project`); the ORM
         # columns keep their `_id` suffix, so the two are mapped explicitly
         # rather than relying on a name match.
@@ -86,14 +100,16 @@ class ConversationService:
         self._commit()
         return conversation
 
-    def delete(self, conversation_id: str) -> None:
-        conversation = self.get_or_404(conversation_id)
+    def delete(self, conversation_id: str, *, owner_id: str) -> None:
+        conversation = self.get_or_404(conversation_id, owner_id=owner_id)
         self.conversations.delete(conversation)
         self._commit()
 
-    def post_message(self, conversation_id: str, payload: MessageCreate) -> tuple[Message, Message, Conversation]:
+    def post_message(
+        self, conversation_id: str, payload: MessageCreate, *, owner_id: str
+    ) -> tuple[Message, Message, Conversation]:
         """Append a user turn and the engine's reply as one atomic exchange."""
-        conversation = self.get_or_404(conversation_id)
+        conversation = self.get_or_404(conversation_id, owner_id=owner_id)
 
         history = self.messages.recent_user_prompts(conversation_id)
         mode_id = payload.mode or conversation.mode_id
