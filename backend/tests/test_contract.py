@@ -2,6 +2,11 @@
 
 These guard the things later modules depend on — the probes an orchestrator
 calls, the documented API surface, and the reference rows every view needs.
+
+MODULE 4 note: this file uses `anon_client` for the public surface (probes,
+metadata, docs, modes) and `client` for the authenticated surface. The set of
+routes that *require* a session is asserted explicitly in
+`test_authorization.py`; here the concern is the wire format, not access.
 """
 
 from fastapi.testclient import TestClient
@@ -31,6 +36,20 @@ EXPECTED_PATHS = {
     ("get", "/api/v1/memory"),
     ("post", "/api/v1/memory"),
     ("delete", "/api/v1/memory/{memory_id}"),
+    # MODULE 4 surface.
+    ("post", "/api/v1/auth/register"),
+    ("post", "/api/v1/auth/login"),
+    ("post", "/api/v1/auth/logout"),
+    ("post", "/api/v1/auth/refresh"),
+    ("get", "/api/v1/auth/me"),
+    ("post", "/api/v1/auth/change-password"),
+    ("post", "/api/v1/auth/forgot-password"),
+    ("post", "/api/v1/auth/reset-password"),
+    ("get", "/api/v1/users/me"),
+    ("get", "/api/v1/admin/users"),
+    ("get", "/api/v1/admin/usage"),
+    ("get", "/api/v1/admin/events"),
+    ("get", "/api/v1/admin/system-health"),
 }
 
 EXPECTED_TABLES = {
@@ -43,19 +62,25 @@ EXPECTED_TABLES = {
     "memory_records",
     "activity_events",
     "daily_usage",
+    # MODULE 4 identity and session tables.
+    "users",
+    "user_preferences",
+    "auth_sessions",
+    "password_reset_tokens",
+    "auth_events",
 }
 
 
 class TestHealth:
-    def test_liveness_is_always_ok(self, client: TestClient) -> None:
-        response = client.get("/api/v1/health")
+    def test_liveness_is_always_ok(self, anon_client: TestClient) -> None:
+        response = anon_client.get("/api/v1/health")
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "ok"
         assert body["env"] == "test"
 
-    def test_readiness_reports_database(self, client: TestClient) -> None:
-        response = client.get("/api/v1/health/ready")
+    def test_readiness_reports_database(self, anon_client: TestClient) -> None:
+        response = anon_client.get("/api/v1/health/ready")
         assert response.status_code == 200
         assert response.json()["database"] == "ok"
 
@@ -110,8 +135,8 @@ class TestHealth:
 
 
 class TestSystemInfo:
-    def test_reports_provider_and_docs(self, client: TestClient) -> None:
-        body = client.get("/api/v1/system/info").json()
+    def test_reports_provider_and_docs(self, anon_client: TestClient) -> None:
+        body = anon_client.get("/api/v1/system/info").json()
         assert body["aiProvider"] == "simulator"
         assert "simulator" in body["availableProviders"]
         assert body["docsUrl"] == "/docs"
@@ -119,8 +144,8 @@ class TestSystemInfo:
 
 
 class TestOpenAPI:
-    def test_schema_is_valid_and_covers_every_route(self, client: TestClient) -> None:
-        schema = client.get("/openapi.json").json()
+    def test_schema_is_valid_and_covers_every_route(self, anon_client: TestClient) -> None:
+        schema = anon_client.get("/openapi.json").json()
         assert schema["info"]["title"]
         paths = {
             (method, path)
@@ -129,8 +154,8 @@ class TestOpenAPI:
         }
         assert EXPECTED_PATHS.issubset(paths), EXPECTED_PATHS - paths
 
-    def test_every_operation_has_a_summary(self, client: TestClient) -> None:
-        schema = client.get("/openapi.json").json()
+    def test_every_operation_has_a_summary(self, anon_client: TestClient) -> None:
+        schema = anon_client.get("/openapi.json").json()
         missing = [
             f"{method.upper()} {path}"
             for path, operations in schema["paths"].items()
@@ -139,17 +164,17 @@ class TestOpenAPI:
         ]
         assert missing == []
 
-    def test_docs_and_redoc_are_served(self, client: TestClient) -> None:
-        assert client.get("/docs").status_code == 200
-        assert client.get("/redoc").status_code == 200
+    def test_docs_and_redoc_are_served(self, anon_client: TestClient) -> None:
+        assert anon_client.get("/docs").status_code == 200
+        assert anon_client.get("/redoc").status_code == 200
 
 
 class TestSeededReferenceData:
     def test_all_tables_exist(self, session) -> None:
         assert EXPECTED_TABLES.issubset(set(inspect(session.bind).get_table_names()))
 
-    def test_seven_modes_with_frontend_aura_tokens(self, client: TestClient) -> None:
-        modes = client.get("/api/v1/modes").json()
+    def test_seven_modes_with_frontend_aura_tokens(self, anon_client: TestClient) -> None:
+        modes = anon_client.get("/api/v1/modes").json()
         assert [m["id"] for m in modes] == [
             "general",
             "research",
@@ -171,6 +196,16 @@ class TestSeededReferenceData:
         seed_all(session)
         after = session.execute(text("SELECT COUNT(*) FROM conversations")).scalar()
         assert before == after
+
+    def test_seed_creates_no_accounts(self, session) -> None:
+        """No user is ever seeded — least of all an administrator.
+
+        A seeded account is a shipped credential. The only way to get an admin
+        is the explicit `create_admin` command.
+        """
+        from app.models import User
+
+        assert session.query(User).count() == 0
 
     def test_foreign_keys_are_enforced(self, session) -> None:
         from sqlalchemy.exc import IntegrityError
@@ -194,13 +229,17 @@ class TestSeededReferenceData:
             raise AssertionError("FK constraint was not enforced")
 
     def test_cascade_delete_removes_messages(self, client: TestClient, session) -> None:
+        """A thread the caller owns is deletable, and takes its messages with it."""
         from app.models import Message
 
-        seeded = session.query(Message).filter_by(conversation_id="c-orbital").count()
-        assert seeded > 0
+        created = client.post("/api/v1/conversations", json={"title": "Cascade probe"}).json()
+        client.post(
+            f"/api/v1/conversations/{created['id']}/messages", json={"body": "hello"}
+        )
+        assert session.query(Message).filter_by(conversation_id=created["id"]).count() == 2
 
-        assert client.delete("/api/v1/conversations/c-orbital").status_code == 204
-        assert session.query(Message).filter_by(conversation_id="c-orbital").count() == 0
+        assert client.delete(f"/api/v1/conversations/{created['id']}").status_code == 204
+        assert session.query(Message).filter_by(conversation_id=created["id"]).count() == 0
 
 
 class TestWireFormatMatchesFrontendTypes:
@@ -212,6 +251,7 @@ class TestWireFormatMatchesFrontendTypes:
     """
 
     def test_conversations_use_frontend_field_names(self, client: TestClient) -> None:
+        client.post("/api/v1/conversations", json={"title": "Format probe"})
         item = client.get("/api/v1/conversations").json()["items"][0]
         assert set(item) == {
             "id", "title", "preview", "mode", "project", "pinned", "archived",
@@ -221,7 +261,13 @@ class TestWireFormatMatchesFrontendTypes:
     def test_conversation_timestamps_are_epoch_millis(self, client: TestClient) -> None:
         # `formatRelative(ts: number)` in the UI does arithmetic on these, so a
         # string here would silently render as "NaN ago".
-        item = client.get("/api/v1/conversations").json()["items"][0]
+        created = client.post(
+            "/api/v1/conversations", json={"title": "Timestamp probe"}
+        ).json()
+        client.post(
+            f"/api/v1/conversations/{created['id']}/messages", json={"body": "hello"}
+        )
+        item = client.get(f"/api/v1/conversations/{created['id']}").json()
         assert isinstance(item["updatedAt"], int)
         assert isinstance(item["lastMessageAt"], int)
         assert item["updatedAt"] > 1_600_000_000_000  # a plausible epoch-ms value
@@ -236,6 +282,9 @@ class TestWireFormatMatchesFrontendTypes:
         assert set(client.get("/api/v1/tools").json()[0]) == {
             "id", "name", "category", "connected", "permission", "calls",
         }
+        # Memory is per-account, so the shape is asserted against a record the
+        # caller just created rather than against the Module 2 demo rows.
+        client.post("/api/v1/memory", json={"statement": "Wire format probe"})
         assert set(client.get("/api/v1/memory").json()[0]) == {
             "id", "statement", "scope", "confidence", "learned",
         }
@@ -260,3 +309,30 @@ class TestWireFormatMatchesFrontendTypes:
         body = created.json()
         assert body["mode"] == "general"
         assert body["project"] == "p-atlas"
+
+
+class TestSecurityHeaders:
+    """MODULE 4: the header foundation. Full policy work is Step 5."""
+
+    def test_baseline_headers_on_every_response(self, anon_client: TestClient) -> None:
+        headers = anon_client.get("/api/v1/health").headers
+        assert headers["X-Content-Type-Options"] == "nosniff"
+        assert headers["X-Frame-Options"] == "DENY"
+        assert headers["Referrer-Policy"] == "no-referrer"
+        assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+
+    def test_headers_are_present_on_error_responses_too(self, anon_client: TestClient) -> None:
+        response = anon_client.get("/api/v1/conversations")
+        assert response.status_code == 401
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+    def test_docs_get_a_compatible_csp(self, anon_client: TestClient) -> None:
+        """The API docs need a looser policy than the app or Swagger breaks."""
+        docs_csp = anon_client.get("/docs").headers["Content-Security-Policy"]
+        app_csp = anon_client.get("/api/v1/health").headers["Content-Security-Policy"]
+        assert "cdn.jsdelivr.net" in docs_csp
+        assert "cdn.jsdelivr.net" not in app_csp
+
+    def test_no_hsts_over_plain_http(self, anon_client: TestClient) -> None:
+        """In development the API is served over HTTP; HSTS would poison localhost."""
+        assert "Strict-Transport-Security" not in anon_client.get("/api/v1/health").headers

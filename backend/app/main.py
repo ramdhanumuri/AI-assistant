@@ -1,8 +1,13 @@
 """FastAPI application factory.
 
 Wiring order matters: logging and error handlers are installed before routers
-so failures during route handling are formatted consistently, and CORS is added
-last so it wraps every response including error responses.
+so failures during route handling are formatted consistently, and the
+middleware stack is built so security headers wrap every response — including
+CORS preflights and error responses — and CORS is added last so it wraps the
+headers too.
+
+MODULE 4 adds `SecurityHeadersMiddleware` and extends the documented tag list
+with the authentication and administration surfaces.
 """
 
 from fastapi import FastAPI
@@ -13,10 +18,17 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
+from app.core.security_headers import SecurityHeadersMiddleware
 
 TAGS_METADATA = [
     {"name": "Health", "description": "Liveness and readiness probes."},
     {"name": "System", "description": "Service metadata and model-provider status."},
+    {
+        "name": "Authentication",
+        "description": "Registration, login, sessions, passwords and the audit-safe current user.",
+    },
+    {"name": "Users", "description": "The authenticated user's own profile and preferences."},
+    {"name": "Administration", "description": "Administrator-only account, usage and audit endpoints."},
     {"name": "Modes", "description": "Intelligence modes and their design tokens."},
     {
         "name": "Conversations",
@@ -36,11 +48,13 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=settings.APP_NAME,
-        version="2.0.0",
+        version="4.0.0",
         description=(
-            "Backend foundation for AURELIS. Module 2 delivers the persistence "
-            "layer, the chat write path, reference-data endpoints and the "
-            "model-provider seam that later modules extend."
+            "Backend for AURELIS. Module 2 delivered the persistence layer, "
+            "the chat write path and the model-provider seam; Module 3 put the "
+            "schema on Supabase; Module 4 adds authentication (Argon2id "
+            "passwords, short-lived access tokens, rotating refresh sessions) "
+            "and server-enforced authorization."
         ),
         openapi_tags=TAGS_METADATA,
         docs_url="/docs",
@@ -52,24 +66,32 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
 
+    # Added before CORS so CORS ends up outermost and still decorates the
+    # preflight response with the headers a browser needs.
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Retry-After"],
     )
 
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
     _install_openapi(app)
 
     logger.info(
-        "%s ready | env=%s | provider=%s | db=%s",
+        "%s ready | env=%s | provider=%s | db=%s | cookies=%s/%s",
         settings.APP_NAME,
         settings.APP_ENV,
         settings.AI_PROVIDER,
         settings.DATABASE_URL.split("://", 1)[0],
+        settings.cookie_samesite,
+        "secure" if settings.is_cookie_secure else "insecure",
     )
+    if settings.is_production and not settings.CORS_ORIGINS:
+        logger.warning("CORS_ORIGINS is empty in production; no browser origin will be allowed")
     return app
 
 

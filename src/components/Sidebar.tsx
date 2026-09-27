@@ -11,12 +11,16 @@ import {
   Plug,
   Search,
   Settings2,
+  ShieldCheck,
   Sparkles,
 } from 'lucide-react';
 import { useMemo } from 'react';
 import { useApp } from '@/state/AppContext';
+import { useAuth } from '@/state/AuthContext';
+import { Link } from '@/lib/router';
 import { MODE_BY_ID } from '@/data/mock';
 import { cx, formatRelative, rgba } from '@/lib/utils';
+import { UserMenu } from '@/components/UserMenu';
 import type { ViewId } from '@/types';
 
 const NAV: { id: ViewId; label: string; icon: typeof Activity }[] = [
@@ -48,6 +52,7 @@ export function Sidebar() {
 
   const active = MODE_BY_ID[mode];
   const recent = useMemo(() => conversations.slice(0, 7), [conversations]);
+  const { isAdmin } = useAuth();
 
   return (
     <>
@@ -321,6 +326,28 @@ export function Sidebar() {
               </span>
             )}
           </button>
+
+          {/* Administration is rendered only for a server-confirmed admin.
+              Hiding it is cosmetic — `/api/v1/admin/*` re-checks the role. */}
+          {isAdmin && (
+            <Link
+              to="/admin"
+              className={cx(
+                'flex h-10 w-full items-center gap-3 rounded-lg text-champagne/90 transition-colors duration-400 hover:bg-champagne/[0.07] hover:text-champagne-bright',
+                sidebarOpen ? 'px-3.5' : 'justify-center px-0',
+              )}
+              title="Administration"
+            >
+              <ShieldCheck className="h-4 w-4 shrink-0" />
+              {sidebarOpen && (
+                <span className="font-mono text-[10.5px] uppercase tracking-widest2">
+                  Admin
+                </span>
+              )}
+            </Link>
+          )}
+
+          <UserMenu collapsed={!sidebarOpen} />
 
           {sidebarOpen && (
             <div className="mt-3 flex items-center justify-between rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2.5">

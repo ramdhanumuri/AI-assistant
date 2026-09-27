@@ -15,12 +15,25 @@ class ConversationRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def get(self, conversation_id: str) -> Conversation | None:
-        return self.session.get(Conversation, conversation_id)
+    def get(self, conversation_id: str, *, owner_id: str | None = None) -> Conversation | None:
+        """Fetch one conversation, scoped to its owner.
+
+        `owner_id` is required for every user-facing path: passing it makes the
+        ownership check part of the query rather than a comparison afterwards,
+        so a missed branch cannot leak another account's thread. It stays
+        optional only for internal/admin callers.
+        """
+        conversation = self.session.get(Conversation, conversation_id)
+        if conversation is None:
+            return None
+        if owner_id is not None and conversation.owner_id != owner_id:
+            return None
+        return conversation
 
     def list(
         self,
         *,
+        owner_id: str | None = None,
         include_archived: bool = False,
         pinned: bool | None = None,
         project_id: str | None = None,
@@ -30,6 +43,10 @@ class ConversationRepository:
         offset: int = 0,
     ) -> tuple[list[Conversation], int]:
         conditions = []
+        if owner_id is not None:
+            # NULL owner rows (the MODULE 2 demo data) match nothing, which is
+            # the intended outcome: unowned content is not served to anyone.
+            conditions.append(Conversation.owner_id == owner_id)
         if not include_archived:
             conditions.append(Conversation.archived.is_(False))
         if pinned is not None:

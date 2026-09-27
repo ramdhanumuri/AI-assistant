@@ -154,24 +154,32 @@ class TestSQLMigrations:
         names = [p.name for p in migrations]
         assert names[0].startswith("0001_")
         assert names[1].startswith("0002_")
+        assert names[2].startswith("0003_")
 
     def test_schema_migration_creates_every_orm_table(self) -> None:
+        """Every ORM table must be created by some migration file.
+
+        The set is split across 0001 (MODULE 2 core) and 0003 (MODULE 4
+        identity), so the check is "present in the concatenated schema" rather
+        than "present in 0001".
+        """
         from pathlib import Path
 
         from app.db.base import Base
 
-        sql = (
-            Path(__file__).resolve().parents[1]
-            / "supabase"
-            / "migrations"
-            / "0001_core_schema.sql"
-        ).read_text(encoding="utf-8")
+        migrations_dir = (
+            Path(__file__).resolve().parents[1] / "supabase" / "migrations"
+        )
+        schema_sql = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(migrations_dir.glob("000[13]*.sql"))
+        )
 
         import app.models  # noqa: F401  (register mappers)
 
         for table in Base.metadata.tables:
-            assert f"create table if not exists {table}" in sql, (
-                f"{table} missing from the Supabase schema migration"
+            assert f"create table if not exists {table}" in schema_sql, (
+                f"{table} missing from the Supabase schema migrations"
             )
 
     def test_rls_migration_enables_rls_on_every_orm_table(self) -> None:
@@ -179,17 +187,53 @@ class TestSQLMigrations:
 
         from app.db.base import Base
 
+        migrations_dir = (
+            Path(__file__).resolve().parents[1] / "supabase" / "migrations"
+        )
+        sql = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(migrations_dir.glob("*.sql"))
+        )
+
+        for table in Base.metadata.tables:
+            assert (
+                f"alter table {table}" in sql
+                and "enable row level security" in sql
+            ), f"RLS not enabled for {table}"
+
+    def test_identity_migration_never_stores_a_plaintext_credential(self) -> None:
+        """Guard the one mistake this migration must never make.
+
+        A `password` column, or a plain `token` column rather than a
+        `token_hash`, would mean credentials at rest in a form a reader could
+        use.
+        """
+        from pathlib import Path
+
         sql = (
             Path(__file__).resolve().parents[1]
             / "supabase"
             / "migrations"
-            / "0002_rls_policies.sql"
-        ).read_text(encoding="utf-8")
+            / "0003_identity_and_sessions.sql"
+        ).read_text(encoding="utf-8").lower()
 
-        for table in Base.metadata.tables:
-            assert f"alter table {table}" in sql and "enable row level security" in sql, (
-                f"RLS not enabled for {table}"
-            )
+        assert "password_hash" in sql
+        assert "password text" not in sql
+        assert "token_hash" in sql
+        assert "token text" not in sql
+
+    def test_identity_migration_has_no_seeded_credentials(self) -> None:
+        from pathlib import Path
+
+        sql = (
+            Path(__file__).resolve().parents[1]
+            / "supabase"
+            / "migrations"
+            / "0003_identity_and_sessions.sql"
+        ).read_text(encoding="utf-8").lower()
+
+        assert "insert into users" not in sql
+        assert "admin@example.com" not in sql
 
     def test_migrations_are_valid_postgres_syntax(self) -> None:
         """Parse the migrations with the real PostgreSQL grammar.

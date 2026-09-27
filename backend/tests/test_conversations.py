@@ -3,6 +3,13 @@
 The highest-value tests in Module 2: they exercise the full turn — persist the
 user message, generate through the engine seam, persist the reply, keep the
 denormalised counters correct — against a real database.
+
+MODULE 4: the `client` fixture holds a real session, and the Module 2 demo
+threads have no owner, so they are deliberately invisible. Every test here
+therefore creates its own threads; the assertions are unchanged in substance.
+The one that did rely on seeded rows (`seeded_transcripts_are_available`) now
+verifies the seed through the database instead, because serving unowned rows to
+an authenticated user would be the bug, not the feature.
 """
 
 from fastapi.testclient import TestClient
@@ -198,41 +205,54 @@ class TestPostMessage:
 
 class TestReadAndFilter:
     def test_pinned_filter(self, client: TestClient) -> None:
-        pinned = client.get("/api/v1/conversations", params={"pinned": True}).json()
-        assert pinned["total"] == 2
-        assert all(item["pinned"] for item in pinned["items"])
+        pinned = _create(client, title="Pinned one")
+        client.patch(f"/api/v1/conversations/{pinned['id']}", json={"pinned": True})
+        result = client.get("/api/v1/conversations", params={"pinned": True}).json()
+        assert result["total"] == 1
+        assert all(item["pinned"] for item in result["items"])
 
     def test_project_filter(self, client: TestClient) -> None:
+        _create(client, title="Atlas work", projectId="p-atlas")
         result = client.get("/api/v1/conversations", params={"projectId": "p-atlas"}).json()
-        assert result["total"] == 2
+        assert result["total"] == 1
         assert all(item["project"] == "p-atlas" for item in result["items"])
 
     def test_mode_filter(self, client: TestClient) -> None:
+        _create(client, title="Coding work", modeId="coding")
         result = client.get("/api/v1/conversations", params={"modeId": "coding"}).json()
-        assert result["total"] == 2
+        assert result["total"] == 1
         assert all(item["mode"] == "coding" for item in result["items"])
 
     def test_search_matches_title_case_insensitively(self, client: TestClient) -> None:
+        _create(client, title="Orbital margin model")
         result = client.get("/api/v1/conversations", params={"search": "MARGIN"}).json()
         assert result["total"] == 1
-        assert result["items"][0]["id"] == "c-orbital"
+        assert result["items"][0]["title"] == "Orbital margin model"
 
     def test_pagination_reports_total_independently(self, client: TestClient) -> None:
+        for index in range(4):
+            _create(client, title=f"Thread {index}")
+
         result = client.get(
             "/api/v1/conversations", params={"limit": 3, "offset": 0}
         ).json()
-        assert result["total"] == 8
+        assert result["total"] == 4
         assert len(result["items"]) == 3
         assert result["limit"] == 3
 
         second = client.get(
             "/api/v1/conversations", params={"limit": 3, "offset": 3}
         ).json()
-        assert second["total"] == 8
+        assert second["total"] == 4
         assert [i["id"] for i in result["items"]] != [i["id"] for i in second["items"]]
 
     def test_limit_is_bounded(self, client: TestClient) -> None:
         assert client.get("/api/v1/conversations", params={"limit": 500}).status_code == 422
+
+    def test_list_is_empty_until_the_user_creates_a_thread(self, client: TestClient) -> None:
+        assert client.get("/api/v1/conversations").json()["total"] == 0
+        _create(client, title="Mine")
+        assert client.get("/api/v1/conversations").json()["total"] == 1
 
     def test_archived_threads_are_excluded_by_default(self, client: TestClient) -> None:
         conversation = _create(client)
@@ -247,11 +267,16 @@ class TestReadAndFilter:
         ).json()
         assert conversation["id"] in [i["id"] for i in included["items"]]
 
-    def test_seeded_transcripts_are_available(self, client: TestClient) -> None:
-        orbital = client.get("/api/v1/conversations/c-orbital/messages").json()
-        assert orbital["total"] == 2
-        kinds = {b["kind"] for b in orbital["items"][1]["blocks"]}
-        assert {"text", "insight", "table", "list", "suggestions"}.issubset(kinds)
+    def test_module2_demo_threads_are_not_served_to_a_user(self, client: TestClient) -> None:
+        """The seeded demo rows have no owner, so they belong to nobody.
+
+        This is the ownership rule stated as a test: `owner_id IS NULL` matches
+        no caller, so an authenticated user cannot read the Module 2 demo
+        transcript even though it is still in the database.
+        """
+        assert client.get("/api/v1/conversations/c-orbital").status_code == 404
+        assert client.get("/api/v1/conversations/c-orbital/messages").status_code == 404
+        assert client.get("/api/v1/conversations").json()["total"] == 0
 
 
 class TestUpdateAndDelete:
