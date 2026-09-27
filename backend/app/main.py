@@ -18,6 +18,7 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
+from app.core.request_context import RequestContextMiddleware
 from app.core.security_headers import SecurityHeadersMiddleware
 
 TAGS_METADATA = [
@@ -46,49 +47,75 @@ def create_app() -> FastAPI:
     configure_logging()
     logger = get_logger(__name__)
 
+    # The interactive docs are a development tool: they enumerate every schema
+    # and endpoint, which is free reconnaissance in production. Served by
+    # default locally and hidden outside it unless explicitly re-enabled.
+    docs_enabled = settings.docs_enabled
+
     app = FastAPI(
         title=settings.APP_NAME,
-        version="4.0.0",
+        version="5.0.0",
         description=(
             "Backend for AURELIS. Module 2 delivered the persistence layer, "
             "the chat write path and the model-provider seam; Module 3 put the "
             "schema on Supabase; Module 4 adds authentication (Argon2id "
             "passwords, short-lived access tokens, rotating refresh sessions) "
-            "and server-enforced authorization."
+            "and server-enforced authorization; Module 5 hardens the whole "
+            "stack (distributed rate limiting, refresh-token reuse detection, "
+            "strict CORS/CSP/CSRF, safe errors and security-event logging)."
         ),
         openapi_tags=TAGS_METADATA,
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
         contact={"name": "AURELIS Platform"},
         license_info={"name": "Proprietary"},
     )
 
     register_exception_handlers(app)
 
-    # Added before CORS so CORS ends up outermost and still decorates the
-    # preflight response with the headers a browser needs.
+    # Middleware order. Starlette makes the last-added middleware outermost, so
+    # from outside in the stack is: CORS → security headers → request context.
+    #   * CORS outermost so a rejected response (a 413 from the body guard, a
+    #     401, a preflight) still carries the CORS headers a browser needs.
+    #   * Security headers next so *every* response — including the request
+    #     context's own 413 — is decorated.
+    #   * Request context innermost: it assigns the id before routing and stamps
+    #     it on every response that passes back out.
+    app.add_middleware(RequestContextMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["Retry-After"],
+        # Explicit methods/headers rather than `*`: with credentials, a wildcard
+        # is invalid per the CORS spec and hides which verbs are actually
+        # reachable. These are exactly the ones the API serves.
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            settings.CSRF_HEADER_NAME,
+            "X-Request-ID",
+        ],
+        expose_headers=["Retry-After", "X-Request-ID"],
     )
 
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
-    _install_openapi(app)
+    if docs_enabled:
+        _install_openapi(app)
 
     logger.info(
-        "%s ready | env=%s | provider=%s | db=%s | cookies=%s/%s",
+        "%s ready | env=%s | provider=%s | db=%s | cookies=%s/%s | docs=%s | cors_origins=%d",
         settings.APP_NAME,
         settings.APP_ENV,
         settings.AI_PROVIDER,
         settings.DATABASE_URL.split("://", 1)[0],
         settings.cookie_samesite,
         "secure" if settings.is_cookie_secure else "insecure",
+        "on" if docs_enabled else "off",
+        len(settings.CORS_ORIGINS),
     )
     if settings.is_production and not settings.CORS_ORIGINS:
         logger.warning("CORS_ORIGINS is empty in production; no browser origin will be allowed")

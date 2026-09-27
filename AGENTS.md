@@ -2,7 +2,7 @@
 
 ## Project
 
-AURELIS — a premium dark-luxury AI assistant. React 18 + TypeScript + Vite 5 +
+AURELIS â€” a premium dark-luxury AI assistant. React 18 + TypeScript + Vite 5 +
 Tailwind + Framer Motion + Lucide on the frontend; FastAPI on the backend. Both
 model layers are deterministic local simulators, not real LLMs.
 
@@ -27,8 +27,41 @@ cd backend
 python run.py                  # uvicorn on 0.0.0.0:12001, reload on
 alembic upgrade head           # create the schema
 python -m app.db.seed          # load reference + demo data
-pytest                         # 90 tests
+pytest                         # 347 tests
 ```
+
+## Security (STEP 5) - `backend/SECURITY.md` is the reference
+
+Defence in depth on top of Step 4 auth. Read `backend/SECURITY.md` before
+changing anything on the auth/transport path. The pieces that are easy to get
+wrong:
+
+- **Middleware order is load-bearing.** In `main.py`, add innermost first;
+  Starlette makes the last-added outermost. Order is CORS → security headers →
+  request context. CORS must stay outermost so a rejected response (413, 401,
+  preflight) still carries CORS headers; security headers sit outside the
+  request-context 413 so that refusal is decorated too.
+- **Request ids.** `X-Request-ID` is echoed from the client only when short and
+  `[A-Za-z0-9._-]`; otherwise server-generated. It lives in a `ContextVar`
+  (`app/core/request_context.py`) so exception handlers and the security logger
+  pick it up. Never put tokens in URLs.
+- **Rate limiting is per-scope** (`app/core/ratelimit.py`). Auth scopes share
+  `AUTH_RATE_LIMIT_ATTEMPTS`; `ai`/`write`/`admin`/... have their own budgets.
+  Set `REDIS_URL` for shared state across workers; without it the in-process
+  limiter gives each worker its own budget. Redis failure fails **open**.
+- **Generic auth responses are deliberate.** Unknown email, wrong password,
+  inactive account and lockout must look identical (or leak existence). Do not
+  add "account locked" wording; a lockout is a 429 with the throttle's exact text.
+- **Security events** are one closed vocabulary (`EVENT_TYPES` in
+  `app/models/user.py`). Never log passwords, raw tokens, reset links or full
+  bodies; `log_security_event` collapses whitespace to stop log injection.
+- **Errors.** Validation responses drop Pydantic's `input`/`url` (they echo
+  submitted secrets). Unexpected exceptions are generic 500s; detail is logged.
+- **Config refuses to boot** outside development on a weak `AUTH_SECRET`,
+  `DEBUG=true`, wildcard CORS, `COOKIE_SECURE=false`, or a plaintext public URL.
+- **Uploads** (`app/core/uploads.py`) are validated and stored under a
+  server-generated name; raw filenames never become path segments. Disabled
+  unless `UPLOAD_STORAGE_DIR` is set.
 
 ### API contract - read before touching schemas
 
@@ -67,12 +100,12 @@ it breaks the proxied preview with a host-check error.
   response from the prompt and streams it. Swapping in a real LLM means
   replacing this module only; consumers use its streaming interface unchanged.
 - **Design tokens** live in `tailwind.config.ts` plus CSS variables in
-  `src/styles/globals.css` (obsidian→titanium ramp, platinum text tiers,
+  `src/styles/globals.css` (obsidianâ†’titanium ramp, platinum text tiers,
   champagne accent, per-mode `aura`). Prefer tokens over raw colour values.
 - **Mode identity** is driven by `MODE_BY_ID[id].aura`, threaded through glass,
   glow and orb components rather than hardcoded per view.
 
-## Pitfalls hit before — do not reintroduce
+## Pitfalls hit before â€” do not reintroduce
 
 - **No side effects inside a `setState` updater.** The Escape handler previously
   closed overlays from within an updater function; that is impure and doubles

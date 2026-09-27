@@ -97,18 +97,52 @@ thing protecting the data.
 
 `enable row level security` leaves the table owner exempt, which is what keeps
 the backend's own connection and the Alembic path working. **Do not switch to
-`force row level security`** until MODULE 4 introduces a dedicated non-owner
-runtime role, or the API loses table access.
+`force row level security`** until a dedicated non-owner runtime role exists, or
+the API loses table access.
 
-MODULE 4 will add, per user-owned table, something of this shape:
+## Step 5 — per-user policies
 
-```sql
-alter table conversations add column owner_id uuid references auth.users (id);
-create policy conversations_owner on conversations
-    for all to authenticated
-    using (owner_id = auth.uid())
-    with check (owner_id = auth.uid());
-```
+`0004_rls_per_user_policies.sql` adds the positive per-user policies that
+MODULE 4 deferred, now that ownership columns exist:
+
+- `users`: a user selects/updates only their own row.
+- `user_preferences`: owner-only via `user_id = auth.uid()`.
+- `conversations`: `owner_id = auth.uid()`; NULL-owner demo rows match nobody.
+- `messages`: ownership inherited from the conversation (`exists` subquery).
+- `memory_records`: `owner_id = auth.uid()` (`owner_id` was reserved in MODULE 2).
+- `auth_sessions`, `password_reset_tokens`, `auth_events`: explicitly revoked
+  from `anon`/`authenticated` — these hold token digests and must stay
+  server-only.
+
+**Scope of these policies.** They key on `auth.uid()`, which PostgREST derives
+from a *Supabase-issued* JWT. AURELIS issues its own sessions and does not mint
+Supabase JWTs, so for the current SPA `auth.uid()` is null and every policy
+denies — the correct deny-by-default posture, not a substitute for the
+application layer's own ownership checks. They exist so a future
+direct-to-PostgREST client cannot read another user's rows.
+
+**Why no admin policy.** AURELIS has no Supabase `admin` role; inventing one
+would duplicate the application's `role` column with a second source of truth.
+Administrator reads are served by the backend, not PostgREST.
+
+### RLS verification
+
+The policies are static SQL; they are checked for PostgreSQL syntax and
+coverage in `tests/test_supabase.py`. A full end-to-end verification against a
+*hosted* Supabase project has not been run from this environment (no project
+credentials and no Postgres server are available here) — see the Step 5
+limitations. To verify against a non-production project:
+
+1. Apply `0001`–`0004` in the SQL editor.
+2. As the `anon` role, `select * from conversations` must return **zero** rows
+   (denied), not an error and not another user's data.
+3. With a Supabase JWT for user A, `select * from conversations` must return
+   only A's rows; selecting a known B-owned id must return zero rows.
+4. `select * from users` as `anon`/`authenticated` must be denied.
+5. Confirm the service-role key is used only by the backend and is absent from
+   every `VITE_`-prefixed variable and the built frontend bundle.
+
+Never run these against a production project.
 
 ## Backend configuration
 

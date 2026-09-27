@@ -39,6 +39,7 @@ from app.core.errors import (
     RateLimitedError,
 )
 from app.core.logging import get_logger
+from app.core.ratelimit import check_rate_limit
 from app.core.security import (
     create_access_token,
     generate_opaque_token,
@@ -63,6 +64,8 @@ from app.models import (
     EVENT_PROFILE_UPDATED,
     EVENT_REGISTERED,
     EVENT_ROLE_CHANGED,
+    EVENT_SESSION_REVOKED,
+    EVENT_SUSPICIOUS_ACTIVITY,
     EVENT_TOKEN_REFRESHED,
     EVENT_TOKEN_REUSE_DETECTED,
     ROLE_ADMIN,
@@ -233,6 +236,28 @@ class AuthService:
     def authenticate(
         self, email: str, password: str, *, context: ClientContext | None = None
     ) -> User:
+        # Per-(address, account) throttle, independent of the per-address budget
+        # the route already applies. The route's budget stops one host spraying
+        # many accounts; this stops a distributed set of hosts all targeting one
+        # account, which the address-only limit cannot see.
+        email_hash = hash_identifier(email)
+        ip_hash = context.ip_hash if context else None
+        pair_key = f"{ip_hash or 'unknown'}:{email_hash}"
+        pair_result = check_rate_limit("login", pair_key)
+        if not pair_result.allowed:
+            self.record_event(
+                EVENT_LOGIN_FAILURE,
+                email=email,
+                context=context,
+                outcome="denied",
+                detail="login throttle active",
+                commit=True,
+            )
+            raise RateLimitedError(
+                "Too many attempts. Try again shortly.",
+                retry_after_seconds=pair_result.retry_after_seconds,
+            )
+
         user = self.get_user_by_email(email)
 
         if user is None:
@@ -266,6 +291,20 @@ class AuthService:
         locked_until = _as_utc(user.locked_until) if user.locked_until else None
         if locked_until and locked_until > utcnow():
             retry_after = int((locked_until - utcnow()).total_seconds())
+            user.failed_login_count = (user.failed_login_count or 0) + 1
+            # A client that keeps hitting an active lock is not a confused user;
+            # escalate it so the audit trail shows a sustained attempt rather
+            # than a wall of identical lockout rows.
+            if user.failed_login_count % settings.AUTH_MAX_FAILED_LOGINS == 0:
+                self.record_event(
+                    EVENT_SUSPICIOUS_ACTIVITY,
+                    user=user,
+                    email=email,
+                    context=context,
+                    outcome="denied",
+                    detail=f"repeated attempts against a locked account ({user.failed_login_count})",
+                    commit=True,
+                )
             self.record_event(
                 EVENT_LOGIN_LOCKED,
                 user=user,
@@ -275,8 +314,10 @@ class AuthService:
                 detail="temporary lockout active",
                 commit=True,
             )
+            # Generic: identical text to the throttle response, so an attacker
+            # cannot tell "you are rate limited" from "this account is locked".
             raise RateLimitedError(
-                "Too many failed attempts. Try again shortly.",
+                "Too many attempts. Try again shortly.",
                 retry_after_seconds=retry_after,
             )
 

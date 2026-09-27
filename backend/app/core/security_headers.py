@@ -1,17 +1,18 @@
 """Security response headers.
 
-The foundation the brief asks for, not the finished policy. Two deliberate
-restrictions on scope:
+The API serves JSON and the interactive docs; the SPA is served by its own
+static host, so the policy here never has to allow the bundler's runtime. That
+lets the app policy be genuinely restrictive rather than the "CSP that cannot
+break the UI" compromise MODULE 4 shipped.
 
-* **A CSP that cannot break the UI.** The frontend is a Vite SPA that loads
-  Google Fonts and injects styles at runtime, so a strict `script-src 'self'`
-  policy would need per-build nonces to work. The policy below therefore
-  restricts `frame-ancestors`, `object-src`, `base-uri` and `form-action` —
-  the directives that matter for clickjacking and injection — and leaves
-  `script-src`/`style-src` to Step 5, where a nonce can be threaded through
-  the build. A CSP that breaks the app is worse than one that is incomplete.
-* **No HSTS in development.** Sending `Strict-Transport-Security` over plain
-  HTTP in dev would pin the developer's browser to HTTPS for `localhost`.
+Two things stay deliberately scoped:
+
+* **`/docs` and `/redoc` get a looser policy.** Swagger UI and ReDoc load
+  bundles from a CDN and evaluate their own templates, so they need
+  `cdn.jsdelivr.net` and `'unsafe-inline'`. Scoped to those paths only.
+* **HSTS only over HTTPS.** Sending `Strict-Transport-Security` over plain HTTP
+  in development would pin the developer's browser to HTTPS for `localhost`.
+  Outside development the header is always sent; the max-age is configurable.
 """
 
 from __future__ import annotations
@@ -22,19 +23,21 @@ from starlette.responses import Response
 
 from app.core.config import settings
 
-# Conservative baseline. `frame-ancestors 'none'` supersedes X-Frame-Options
-# for modern browsers; X-Frame-Options is sent too for older ones.
+# The API returns JSON. A tight policy costs nothing here and means a
+# successful content-type confusion cannot turn an API response into a script
+# execution. `frame-ancestors 'none'` supersedes X-Frame-Options for modern
+# browsers; X-Frame-Options is sent too for older ones.
 BASE_CSP = (
-    "default-src 'self'; "
+    "default-src 'none'; "
+    "script-src 'none'; "
+    "style-src 'none'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "connect-src 'self'; "
     "object-src 'none'; "
-    "base-uri 'self'; "
-    "frame-ancestors 'none'; "
-    "form-action 'self'; "
-    "img-src 'self' data: blob: https:; "
-    "font-src 'self' data: https://fonts.gstatic.com; "
-    "connect-src 'self' https:; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "script-src 'self' 'unsafe-inline'"
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "frame-ancestors 'none'"
 )
 
 # Swagger UI and ReDoc load their bundles from a CDN and eval their own
@@ -52,6 +55,9 @@ DOCS_CSP = (
 )
 
 _DOCS_PATHS = ("/docs", "/redoc")
+
+# Auth responses set cookies; they must never land in a shared cache.
+_NO_STORE_PREFIXES = ("/api/v1/auth",)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -73,20 +79,26 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault(
             "Permissions-Policy",
-            "geolocation=(), microphone=(self), camera=(), payment=()",
+            "geolocation=(), microphone=(self), camera=(), payment=(), usb=()",
         )
         response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
         response.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
 
         if request.url.path.startswith(_DOCS_PATHS):
             response.headers.setdefault("Content-Security-Policy", DOCS_CSP)
         else:
             response.headers.setdefault("Content-Security-Policy", BASE_CSP)
 
+        if request.url.path.startswith(_NO_STORE_PREFIXES):
+            response.headers.setdefault("Cache-Control", "no-store")
+            response.headers.setdefault("Pragma", "no-cache")
+
         if settings.is_cookie_secure:
             # Only over HTTPS; see the module docstring.
             response.headers.setdefault(
-                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+                "Strict-Transport-Security",
+                f"max-age={settings.HSTS_MAX_AGE_SECONDS}; includeSubDomains",
             )
 
         return response

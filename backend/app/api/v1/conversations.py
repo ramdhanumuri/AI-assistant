@@ -14,7 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, Request, status
 
 from app.api.cookies import enforce_csrf
-from app.api.deps import ConversationServiceDep, CurrentUser, Pagination, page
+from app.api.deps import ConversationServiceDep, CurrentUser, Pagination, page, user_rate_limit
 from app.schemas.common import Page
 from app.schemas.conversation import (
     ConversationCreate,
@@ -83,6 +83,7 @@ def create_conversation(
     identity: CurrentUser,
 ) -> ConversationRead:
     enforce_csrf(request)
+    user_rate_limit(identity, scope="write")
     # The owner comes from the session, so a client cannot create a thread on
     # another account's behalf.
     return ConversationRead.model_validate(service.create(payload, owner_id=identity.id))
@@ -171,6 +172,9 @@ def post_message(
     identity: CurrentUser,
 ) -> TurnResult:
     enforce_csrf(request)
+    # The AI request path: a separate budget from ordinary writes so a runaway
+    # client cannot exhaust the write scope with generated turns.
+    user_rate_limit(identity, scope="ai")
     user_message, assistant_message, conversation = service.post_message(
         conversation_id, payload, owner_id=identity.id
     )

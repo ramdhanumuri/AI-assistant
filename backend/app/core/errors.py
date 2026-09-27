@@ -135,18 +135,25 @@ def _payload(code: str, message: str) -> dict[str, object]:
     return {"error": {"code": code, "message": message}}
 
 
-def _serialisable_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Strip non-JSON values from validation errors.
+# Fields Pydantic puts on a validation error that are safe to return. `input`
+# and `url` are deliberately excluded: `input` echoes whatever the caller sent
+# (including a password or a token) back in the response body, which is both a
+# reflection vector and a way to get a secret into a client-side log. `loc` and
+# `msg` are enough for a form to point at the offending field.
+_VALIDATION_FIELDS = ("type", "loc", "msg")
 
-    Pydantic puts the original exception object in `ctx`, which the JSON
-    encoder cannot handle — stringify just that field and pass the rest through.
-    """
+
+def _serialisable_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only the non-sensitive, JSON-safe parts of a validation error."""
     cleaned: list[dict[str, Any]] = []
     for error in errors:
-        item = {key: value for key, value in error.items() if key != "ctx"}
-        ctx = error.get("ctx")
-        if ctx:
-            item["ctx"] = {key: str(value) for key, value in ctx.items()}
+        item: dict[str, Any] = {}
+        for key in _VALIDATION_FIELDS:
+            if key in error and key != "loc":
+                item[key] = error[key]
+        loc = error.get("loc")
+        if loc is not None:
+            item["loc"] = [str(part) for part in loc]
         cleaned.append(item)
     return cleaned
 
@@ -176,9 +183,13 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(Exception)
-    async def _handle_unexpected(_: Request, exc: Exception) -> JSONResponse:
-        # Never leak internals to the client; log the detail server-side.
-        logger.exception("Unhandled error: %s", exc)
+    async def _handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
+        # Never leak internals to the client; log the detail server-side. The
+        # request id is appended by the logging filter, so the response's
+        # X-Request-ID ties the safe client message to this traceback.
+        logger.exception(
+            "Unhandled error on %s %s: %s", request.method, request.url.path, exc
+        )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=_payload("internal_error", "An unexpected error occurred."),

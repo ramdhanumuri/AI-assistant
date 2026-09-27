@@ -32,6 +32,7 @@ from app.core.security import hash_password, validate_password_strength
 from app.db.base import utcnow
 from app.db.session import SessionLocal
 from app.models import (
+    EVENT_ADMIN_PROVISIONED,
     EVENT_ROLE_CHANGED,
     ROLE_ADMIN,
     AuthEvent,
@@ -40,8 +41,6 @@ from app.models import (
 )
 
 logger = get_logger("create_admin")
-
-EVENT_ADMIN_PROVISIONED = "admin_provisioned"
 
 
 def _resolve_password(cli_value: str | None) -> str | None:

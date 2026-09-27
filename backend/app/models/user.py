@@ -55,6 +55,42 @@ EVENT_ROLE_CHANGED = "role_changed"
 EVENT_PROFILE_UPDATED = "profile_updated"
 EVENT_RATE_LIMITED = "rate_limited"
 EVENT_AUTHZ_DENIED = "authorization_denied"
+# Step 5 additions. Kept in the same vocabulary as the Step 4 events so the
+# admin feed and the future security dashboard read one list.
+EVENT_CSRF_FAILURE = "csrf_failure"
+EVENT_SESSION_REVOKED = "session_revoked"
+EVENT_SUSPICIOUS_ACTIVITY = "suspicious_activity"
+EVENT_UPLOAD_REJECTED = "upload_rejected"
+# Written by `create_admin`; declares it here so every event name has one home.
+EVENT_ADMIN_PROVISIONED = "admin_provisioned"
+
+# The complete set of event types. Exported so a test can assert nothing emits
+# a name outside it — a typo would otherwise invent an event no alert matches.
+EVENT_TYPES = frozenset(
+    {
+        EVENT_REGISTERED,
+        EVENT_LOGIN_SUCCESS,
+        EVENT_LOGIN_FAILURE,
+        EVENT_LOGIN_LOCKED,
+        EVENT_LOGOUT,
+        EVENT_TOKEN_REFRESHED,
+        EVENT_TOKEN_REUSE_DETECTED,
+        EVENT_PASSWORD_CHANGED,
+        EVENT_PASSWORD_RESET_REQUESTED,
+        EVENT_PASSWORD_RESET_COMPLETED,
+        EVENT_ACCOUNT_DEACTIVATED,
+        EVENT_ACCOUNT_REACTIVATED,
+        EVENT_ROLE_CHANGED,
+        EVENT_PROFILE_UPDATED,
+        EVENT_RATE_LIMITED,
+        EVENT_AUTHZ_DENIED,
+        EVENT_CSRF_FAILURE,
+        EVENT_SESSION_REVOKED,
+        EVENT_SUSPICIOUS_ACTIVITY,
+        EVENT_UPLOAD_REJECTED,
+        EVENT_ADMIN_PROVISIONED,
+    }
+)
 
 
 def new_id() -> str:
