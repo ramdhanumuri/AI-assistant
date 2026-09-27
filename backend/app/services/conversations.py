@@ -16,13 +16,13 @@ from __future__ import annotations
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, NotFoundError, ServiceUnavailableError
 from app.core.logging import get_logger
 from app.db.base import utcnow
 from app.models import Conversation, Message
 from app.schemas.blocks import TextBlock
 from app.schemas.conversation import ConversationCreate, ConversationUpdate, MessageCreate
-from app.services.engine import Engine, EngineRequest, get_engine
+from app.services.engine import Engine, EngineError, EngineRequest, get_engine
 from app.services.repositories import ConversationRepository, MessageRepository
 
 logger = get_logger(__name__)
@@ -128,15 +128,27 @@ class ConversationService:
         )
         self.messages.add(user_message)
 
-        turn = self.engine.generate(
-            EngineRequest(
-                prompt=payload.body,
-                mode_id=mode_id,
-                voice=payload.voice,
-                conversation_id=conversation.id,
-                history=history,
+        # The engine is an external dependency (a real provider in MODULE 6).
+        # A provider failure must not surface as a 500 with the user's turn half
+        # written: roll back the user message and answer with a safe 503, so a
+        # timeout upstream does not leave an orphaned turn in the transcript.
+        try:
+            turn = self.engine.generate(
+                EngineRequest(
+                    prompt=payload.body,
+                    mode_id=mode_id,
+                    voice=payload.voice,
+                    conversation_id=conversation.id,
+                    history=history,
+                )
             )
-        )
+        except EngineError as exc:
+            self.session.rollback()
+            logger.warning("Engine failed to produce a turn: %s", exc)
+            raise ServiceUnavailableError(
+                "The assistant is temporarily unavailable. Please try again.",
+                code="engine_unavailable",
+            ) from exc
 
         assistant_message = Message(
             id=_new_id("msg"),

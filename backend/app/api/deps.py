@@ -21,10 +21,11 @@ from app.core.errors import (
     RateLimitedError,
 )
 from app.core.logging import get_logger
-from app.core.ratelimit import get_limiter
+from app.core.ratelimit import check_rate_limit
 from app.core.security import AccessTokenError, decode_access_token
+from app.core.security_events import log_security_event
 from app.db.session import get_db
-from app.models import ROLE_ADMIN, User
+from app.models import EVENT_AUTHZ_DENIED, EVENT_RATE_LIMITED, ROLE_ADMIN, User
 from app.api.cookies import read_access_token
 from app.services.auth import AuthService, ClientContext
 from app.services.catalog import CatalogService
@@ -113,17 +114,44 @@ ClientContextDep = Annotated[ClientContext, Depends(client_context)]
 
 
 def rate_limit(request: Request, *, scope: str) -> None:
-    """Apply the authentication throttle to the caller's address.
+    """Apply the throttle for `scope` to the caller's address.
 
-    Raises `RateLimitedError` (429 + `Retry-After`) when the window is full.
+    Raises `RateLimitedError` (429 + `Retry-After`) when the window is full and
+    records the event, so a sustained attempt is visible in the audit trail.
     """
     context = client_context(request)
-    key = f"{scope}:{context.ip_hash or 'unknown'}"
-    result = get_limiter().check(key)
+    key = context.ip_hash or "unknown"
+    result = check_rate_limit(scope, key)
     if not result.allowed:
-        logger.warning("Authentication rate limit hit for scope=%s", scope)
+        log_security_event(
+            EVENT_RATE_LIMITED,
+            outcome="denied",
+            ip_hash=context.ip_hash,
+            detail=f"scope={scope}",
+        )
         raise RateLimitedError(
             "Too many attempts. Please wait and try again.",
+            retry_after_seconds=result.retry_after_seconds,
+        )
+
+
+def user_rate_limit(identity: Identity, *, scope: str) -> None:
+    """Throttle an authenticated caller by account id for a non-auth scope.
+
+    Keyed on the account rather than the address so the budget follows the user
+    across networks (and cannot be escaped by changing IP). Raises the same
+    `RateLimitedError` as the unauthenticated throttle.
+    """
+    result = check_rate_limit(scope, identity.id)
+    if not result.allowed:
+        log_security_event(
+            EVENT_RATE_LIMITED,
+            outcome="denied",
+            subject=identity.id,
+            detail=f"scope={scope}",
+        )
+        raise RateLimitedError(
+            "Too many requests. Please slow down and try again.",
             retry_after_seconds=result.retry_after_seconds,
         )
 
@@ -187,7 +215,12 @@ def require_admin(identity: CurrentUser) -> Identity:
     request body. A client cannot assert its way into this dependency.
     """
     if not identity.is_admin:
-        logger.warning("Admin authorization denied for user=%s", identity.user.id)
+        log_security_event(
+            EVENT_AUTHZ_DENIED,
+            outcome="denied",
+            subject=identity.user.id,
+            detail="admin_required",
+        )
         raise AuthorizationError("You do not have permission to access this resource.")
     return identity
 
@@ -221,4 +254,5 @@ __all__ = [
     "rate_limit",
     "require_admin",
     "require_authenticated_user",
+    "user_rate_limit",
 ]

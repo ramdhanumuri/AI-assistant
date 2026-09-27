@@ -11,7 +11,12 @@ from typing import Annotated
 from fastapi import APIRouter, Query, Request, status
 
 from app.api.cookies import enforce_csrf
-from app.api.deps import CatalogServiceDep, CurrentUser
+from app.api.deps import (
+    CatalogServiceDep,
+    ClientContextDep,
+    CurrentUser,
+    user_rate_limit,
+)
 from app.schemas.catalog import (
     KnowledgeSourceRead,
     MemoryRecordCreate,
@@ -49,6 +54,7 @@ def create_project(
     identity: CurrentUser,
 ) -> ProjectRead:
     enforce_csrf(request)
+    user_rate_limit(identity, scope="write")
     project = service.create_project(payload)
     return ProjectRead(
         id=project.id,
@@ -133,6 +139,7 @@ def create_memory(
     identity: CurrentUser,
 ) -> MemoryRecordRead:
     enforce_csrf(request)
+    user_rate_limit(identity, scope="write")
     return service.memory_read(service.create_memory(payload, owner_id=identity.id))
 
 

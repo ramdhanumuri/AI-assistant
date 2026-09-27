@@ -14,6 +14,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # (256 bits) is the floor for HS256; anything shorter is rejected at startup.
 MIN_AUTH_SECRET_LENGTH = 32
 
+# Anything that is not one of these is treated as a deployed environment.
+_LOCAL_ENVIRONMENTS = frozenset({"development", "dev", "test", "local"})
+
 # Signing keys that ship in documentation, examples or tests. Accepting one of
 # these in a non-development environment would make every token forgeable, so
 # they are rejected unless APP_ENV is development/test.
@@ -80,12 +83,49 @@ class Settings(BaseSettings):
     COOKIE_SAMESITE: str = "lax"
     # None ⇒ derived from APP_ENV: secure outside development/test.
     COOKIE_SECURE: bool | None = None
+    # HSTS lifetime. Only emitted over HTTPS (see security_headers.py); raise
+    # this deliberately, since browsers cache it and the change is not quick to
+    # undo.
+    HSTS_MAX_AGE_SECONDS: int = 31_536_000
 
     # ── Abuse controls ────────────────────────────────────────────────
     AUTH_RATE_LIMIT_ATTEMPTS: int = 10
     AUTH_RATE_LIMIT_WINDOW_SECONDS: int = 300
     AUTH_MAX_FAILED_LOGINS: int = 10
     AUTH_LOCKOUT_SECONDS: int = 900
+
+    # Optional shared store for rate limiting. When set, counters live in Redis
+    # so every worker shares one budget; when empty the in-process limiter is
+    # used (correct for a single worker, degrade-only for several).
+    REDIS_URL: str = ""
+    # Generous guard rails for the general (non-auth) API throttle. See
+    # `app/core/ratelimit.py` for the per-scope budgets these bound.
+    GENERAL_RATE_LIMIT_ATTEMPTS: int = 600
+    GENERAL_RATE_LIMIT_WINDOW_SECONDS: int = 60
+
+    # ── Request handling ──────────────────────────────────────────────
+    # Ceiling for JSON request bodies, enforced before the body is parsed so a
+    # multi-megabyte payload cannot be buffered into memory.
+    MAX_REQUEST_BODY_BYTES: int = 1_048_576
+    # Swagger/ReDoc/OpenAPI are served in development and hidden outside it by
+    # default. Set explicitly to re-expose them (e.g. behind an internal network).
+    ENABLE_API_DOCS: bool | None = None
+
+    # ── File uploads (Step 8 foundation) ──────────────────────────────
+    # When empty, uploads are disabled by default: routes that require the
+    # validator refuse rather than writing somewhere unexpected.
+    UPLOAD_STORAGE_DIR: str = ""
+    MAX_UPLOAD_BYTES: int = 10_485_760
+    ALLOWED_UPLOAD_MIME_TYPES: list[str] = [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "application/pdf",
+        "text/plain",
+        "text/markdown",
+        "text/csv",
+    ]
 
     # ── Provisioning ──────────────────────────────────────────────────
     # One-time bootstrap administrator. Read only by
@@ -133,7 +173,7 @@ class Settings(BaseSettings):
         if self.cookie_samesite == "none" and not self.is_cookie_secure:
             raise ValueError("SameSite=None requires Secure cookies")
 
-        if self.APP_ENV.strip().lower() in {"development", "dev", "test", "local"}:
+        if self.APP_ENV.strip().lower() in _LOCAL_ENVIRONMENTS:
             # A developer must be able to run the API with no `.env` at all.
             return self
 
@@ -156,11 +196,47 @@ class Settings(BaseSettings):
                 )
         if self.COOKIE_SECURE is False:
             raise ValueError("COOKIE_SECURE must be true outside development")
+        # DEBUG is the single most common production leak: it turns every
+        # unexpected exception into a traceback and makes the interactive docs
+        # a debugging surface.
+        if self.DEBUG:
+            raise ValueError("DEBUG must be false outside development")
+        # Credentialed CORS with a wildcard origin is both invalid per the spec
+        # and a silent way to let any website drive authenticated requests.
+        if "*" in self.CORS_ORIGINS:
+            raise ValueError(
+                "CORS_ORIGINS must not contain '*' outside development; "
+                "list the trusted origins explicitly"
+            )
+        for origin in self.CORS_ORIGINS:
+            if not origin.startswith(("http://", "https://")):
+                raise ValueError(f"CORS origin '{origin}' must be an http(s) URL")
+        self._validate_deployment_urls()
         return self
+
+    def _validate_deployment_urls(self) -> None:
+        """Reject a plaintext HTTP public URL outside development."""
+        for label, value in (
+            ("SUPABASE_URL", self.SUPABASE_URL),
+            ("REDIS_URL", self.REDIS_URL),
+        ):
+            if value.strip().lower().startswith("http://"):
+                raise ValueError(f"{label} must use https outside development")
 
     @property
     def is_production(self) -> bool:
-        return self.APP_ENV.strip().lower() not in {"development", "dev", "test", "local"}
+        return self.APP_ENV.strip().lower() not in _LOCAL_ENVIRONMENTS
+
+    @property
+    def uploads_enabled(self) -> bool:
+        return bool(self.UPLOAD_STORAGE_DIR.strip())
+
+    @property
+    def docs_enabled(self) -> bool:
+        """Explicit config wins; otherwise only in local environments."""
+        if self.ENABLE_API_DOCS is not None:
+            return self.ENABLE_API_DOCS
+        return not self.is_production
 
     @property
     def cookie_samesite(self) -> str:

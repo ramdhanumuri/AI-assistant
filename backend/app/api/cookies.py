@@ -23,6 +23,8 @@ from fastapi import Request, Response
 from app.core.config import settings
 from app.core.errors import AuthorizationError
 from app.core.logging import get_logger
+from app.core.security_events import log_security_event
+from app.models import EVENT_CSRF_FAILURE
 
 logger = get_logger(__name__)
 
@@ -137,6 +139,11 @@ def enforce_csrf(request: Request) -> None:
     Only applies when the request is cookie-authenticated. A bearer-token
     client (no cookies) is not vulnerable to CSRF at all, because nothing
     attaches its credential automatically.
+
+    Failure is deliberately uniform: an absent token and a mismatched token
+    produce the same 403 with the same message, so a cross-site attacker learns
+    nothing about whether the session exists. The rejection never echoes the
+    presented token.
     """
     if request.method not in UNSAFE_METHODS:
         return
@@ -151,12 +158,18 @@ def enforce_csrf(request: Request) -> None:
 
     header_token = read_csrf_header(request)
     if not cookie_token or not header_token:
-        logger.warning("CSRF check failed: missing token on %s %s", request.method, request.url.path)
-        raise AuthorizationError("Request could not be verified. Reload and try again.")
-
+        _reject(request, reason="missing_token")
     if not secrets.compare_digest(cookie_token, header_token):
-        logger.warning("CSRF check failed: token mismatch on %s %s", request.method, request.url.path)
-        raise AuthorizationError("Request could not be verified. Reload and try again.")
+        _reject(request, reason="token_mismatch")
+
+
+def _reject(request: Request, *, reason: str) -> None:
+    log_security_event(
+        EVENT_CSRF_FAILURE,
+        outcome="denied",
+        detail=f"{reason} on {request.method} {request.url.path}",
+    )
+    raise AuthorizationError("Request could not be verified. Reload and try again.")
 
 
 __all__ = [

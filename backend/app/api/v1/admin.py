@@ -17,13 +17,21 @@ from fastapi import APIRouter, Query, Request
 from sqlalchemy import func, select
 
 from app.api.cookies import enforce_csrf
-from app.api.deps import AdminUser, AuthServiceDep, ClientContextDep, DbSession, Pagination
+from app.api.deps import (
+    AdminUser,
+    AuthServiceDep,
+    ClientContextDep,
+    DbSession,
+    Pagination,
+    user_rate_limit,
+)
 from app.core.config import settings
 from app.core.errors import InvalidRequestError, NotFoundError
 from app.core.logging import get_logger
 from app.db import supabase
 from app.db.base import utcnow
 from app.models import (
+    EVENT_LOGOUT,
     AuthEvent,
     AuthSession,
     Conversation,
@@ -188,6 +196,7 @@ def update_user(
     the change takes effect on their next request rather than at token expiry.
     """
     enforce_csrf(request)
+    user_rate_limit(identity, scope="admin")
 
     target = db.get(User, user_id)
     if target is None:
@@ -371,13 +380,14 @@ def revoke_user_sessions(
     context: ClientContextDep,
 ) -> dict:
     enforce_csrf(request)
+    user_rate_limit(identity, scope="admin")
     target = db.get(User, user_id)
     if target is None:
         raise NotFoundError("That account does not exist.")
 
     revoked = auth.revoke_all_sessions(target.id)
     auth.record_event(
-        "logout",
+        EVENT_LOGOUT,
         user=target,
         context=context,
         detail=f"revoked {revoked} session(s) by administrator",

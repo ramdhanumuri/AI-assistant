@@ -60,6 +60,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 # Scope keys for the throttle, so login and reset have independent budgets.
 SCOPE_REGISTER = "register"
 SCOPE_LOGIN = "login"
+SCOPE_REFRESH = "refresh"
 SCOPE_RESET = "password-reset"
 
 # Frontend route that receives a reset token. The token is placed in the URL
@@ -196,6 +197,9 @@ def refresh(
     Rotation means the presented token is dead after this call. A replayed
     token revokes every session for the account (see `AuthService.rotate_session`).
     """
+    # Throttle before touching the token: an unauthenticated flood of random
+    # cookies must not reach the database lookup.
+    rate_limit(request, scope=SCOPE_REFRESH)
     enforce_csrf(request)
 
     refresh_token = read_refresh_token(request)
