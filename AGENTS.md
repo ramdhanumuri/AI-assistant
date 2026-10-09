@@ -2,9 +2,10 @@
 
 ## Project
 
-AURELIS â€” a premium dark-luxury AI assistant. React 18 + TypeScript + Vite 5 +
-Tailwind + Framer Motion + Lucide on the frontend; FastAPI on the backend. Both
-model layers are deterministic local simulators, not real LLMs.
+AURELIS — a premium dark-luxury AI assistant. React 18 + TypeScript + Vite 5 +
+Tailwind + Framer Motion + Lucide on the frontend; FastAPI on the backend. The
+backend talks to a real model through a provider abstraction (STEP 6); the
+default `simulator` provider is deterministic and exists so tests stay hermetic.
 
 ## Commands
 
@@ -18,17 +19,52 @@ Always typecheck before considering work done. `npm run build` runs it too.
 
 ## Backend (MODULE 2) - `backend/`
 
-FastAPI + SQLAlchemy 2.0 + Alembic + Pydantic v2 + SQLite. The model layer is a
-deterministic simulator (`backend/app/services/engine/simulator.py`), not a real
-LLM. Port 12001.
+FastAPI + SQLAlchemy 2.0 + Alembic + Pydantic v2 + SQLite. The frontend's
+`src/lib/engine.ts` simulator is untouched; chat turns go through
+`app/ai/providers/` instead. Port 12001.
 
 ```bash
 cd backend
 python run.py                  # uvicorn on 0.0.0.0:12001, reload on
 alembic upgrade head           # create the schema
 python -m app.db.seed          # load reference + demo data
-pytest                         # 347 tests
+pytest                         # 426 tests
 ```
+
+## AI integration (STEP 6) - `backend/app/ai/`
+
+A provider-independent layer. `AIProvider` (`base.py`) exposes `generate()` /
+`stream()`; `factory.py` resolves the adapter from `AI_PROVIDER`. Only the
+OpenAI adapter and the `simulator` are implemented, but nothing outside
+`providers/` knows a vendor's SDK — swapping providers is a new adapter plus
+config, not a chat rewrite.
+
+- **The provider key is backend-only.** It lives in `AI_PROVIDER_API_KEY` and
+  must never reach a `VITE_*` variable, `/api/auth/me`, capabilities, admin
+  responses or logs.
+- **Validation ordering on the stream endpoint is deliberate.** Auth, CSRF,
+  rate limit, conversation ownership, the model allow-list and provider config
+  are all checked *before* `200 OK` and the SSE headers go out; once the stream
+  starts there is no way to send a 404 or 429, so only mid-generation failures
+  appear as in-band `error` frames.
+- **Ownership is server-derived.** The owner id comes from the session, never
+  from the client; another user's conversation ids 404 rather than 403, so
+  existence does not leak.
+- **Context is budgeted, not unbounded.** `context.py` caps the replay by
+  `AI_MAX_CONTEXT_MESSAGES` / `AI_MAX_INPUT_TOKENS` while always keeping the
+  system instructions and the current user turn.
+- **Stream state is honest.** A disconnect or provider failure records
+  `status` of `cancelled`/`failed` with `error_code` and keeps partial text; a
+  turn is never marked `completed` unless it actually finished.
+- **Token counts are only stored when the provider reports them** — `NULL`
+  rather than an invented number. Cost stays zero unless real pricing is
+  configured.
+- **Rate limiting uses the `ai` scope** (`app/core/ratelimit.py`), separate from
+  the ordinary write budget.
+- **`NoDecode` is required on list-valued settings** (`CORS_ORIGINS`,
+  `AI_ALLOWED_MODELS`). pydantic-settings JSON-decodes `list[str]` env values
+  before field validators run, so without it the documented `a,b` form fails at
+  boot.
 
 ## Security (STEP 5) - `backend/SECURITY.md` is the reference
 
@@ -100,12 +136,12 @@ it breaks the proxied preview with a host-check error.
   response from the prompt and streams it. Swapping in a real LLM means
   replacing this module only; consumers use its streaming interface unchanged.
 - **Design tokens** live in `tailwind.config.ts` plus CSS variables in
-  `src/styles/globals.css` (obsidianâ†’titanium ramp, platinum text tiers,
+  `src/styles/globals.css` (obsidian→titanium ramp, platinum text tiers,
   champagne accent, per-mode `aura`). Prefer tokens over raw colour values.
 - **Mode identity** is driven by `MODE_BY_ID[id].aura`, threaded through glass,
   glow and orb components rather than hardcoded per view.
 
-## Pitfalls hit before â€” do not reintroduce
+## Pitfalls hit before — do not reintroduce
 
 - **No side effects inside a `setState` updater.** The Escape handler previously
   closed overlays from within an updater function; that is impure and doubles
