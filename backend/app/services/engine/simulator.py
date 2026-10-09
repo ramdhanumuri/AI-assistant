@@ -475,7 +475,7 @@ def _count_tokens(blocks: tuple[ContentBlock, ...]) -> int:
 
 
 class SimulatorEngine:
-    """Local, deterministic provider used until MODULE 6 lands."""
+    """Local, deterministic provider used for tests and offline development."""
 
     name = "simulator"
 
@@ -505,6 +505,20 @@ class SimulatorEngine:
             route=recipe.key,
             follow_ups=list(recipe.follow_ups),
         )
+
+    async def stream(self, request: EngineRequest):
+        """Yield the turn's text blocks as plain text chunks.
+
+        The simulator has no tokenizer, so it emits each block's body as a
+        single chunk. This exists so the streaming transport and the chat UI
+        can be exercised end to end without provider credentials; it is a real
+        transport, not a server-side re-split of a finished answer.
+        """
+        turn = self.generate(request)
+        for block in turn.blocks:
+            body = getattr(block, "body", None)
+            if isinstance(body, str) and body:
+                yield body
 
     def _voice_turn(
         self, prompt: str, request: EngineRequest, turn_id: str

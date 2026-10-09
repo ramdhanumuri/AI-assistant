@@ -86,7 +86,17 @@ class TestSchemaShape:
             (
                 "messages",
                 {"id", "conversation_id", "position", "role", "mode_id", "blocks",
-                 "reasoning", "traces", "voice", "tokens"},
+                 "reasoning", "traces", "voice", "tokens",
+                 # STEP 6 AI provenance.
+                 "status", "model", "provider", "input_tokens", "output_tokens",
+                 "total_tokens", "latency_ms", "error_code", "idempotency_key"},
+            ),
+            (
+                "ai_usage_events",
+                {"id", "user_id", "conversation_id", "message_id", "provider", "model",
+                 "status", "error_code", "input_tokens", "output_tokens", "total_tokens",
+                 "latency_ms", "time_to_first_token_ms", "estimated_cost", "currency",
+                 "pricing_version", "request_started_at", "request_completed_at"},
             ),
             ("memory_records", {"id", "statement", "scope", "confidence", "owner_id", "learned_at"}),
             ("knowledge_sources", {"id", "name", "kind", "status", "item_count", "last_synced_at"}),

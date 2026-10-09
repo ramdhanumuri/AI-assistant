@@ -22,3 +22,9 @@ psycopg[binary]>=3.2,<4.0
 # Test-only: parses supabase/migrations/*.sql with the real PostgreSQL grammar
 # (libpg_query) so a syntax error fails CI instead of the dashboard.
 pglast>=8.4,<9.0
+# STEP 6: the official OpenAI SDK, used by the `openai` provider adapter
+# (app/ai/providers/openai.py). It also serves any OpenAI-compatible gateway
+# via AI_BASE_URL. Imported lazily inside the adapter, so the app still runs
+# (on the `simulator` provider) if this package is absent — but it is a
+# declared dependency because the real provider is a supported deployment.
+openai>=1.60,<3.0

@@ -68,12 +68,17 @@ PROTECTED_ROUTES: list[tuple[str, str, dict | None]] = [
     ("GET", "/api/v1/memory", None),
     ("POST", "/api/v1/memory", {"statement": "Nope"}),
     ("DELETE", "/api/v1/memory/mem-anything", None),
+    # STEP 6 AI surface.
+    ("GET", "/api/v1/ai/capabilities", None),
+    ("GET", "/api/v1/ai/usage", None),
+    ("POST", "/api/v1/ai/conversations/c-anything/messages/stream", {"body": "hi"}),
 ]
 
 # Administrator-only routes.
 ADMIN_ROUTES: list[tuple[str, str, dict | None]] = [
     ("GET", "/api/v1/admin/users", None),
     ("GET", "/api/v1/admin/usage", None),
+    ("GET", "/api/v1/admin/ai-usage", None),
     ("GET", "/api/v1/admin/events", None),
     ("GET", "/api/v1/admin/system-health", None),
 ]

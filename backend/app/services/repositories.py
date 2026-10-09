@@ -5,10 +5,12 @@ apart means MODULE 3 (data-layer refinement) and MODULE 9 (advanced chat
 management) can extend querying without touching business logic.
 """
 
+from datetime import datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Conversation, Message
+from app.models import AIUsageEvent, Conversation, Message
 
 
 class ConversationRepository:
@@ -149,7 +151,118 @@ class MessageRepository:
                     break
         return list(reversed(prompts))
 
+    def recent_turns(
+        self, conversation_id: str, *, limit: int, exclude_position: int | None = None
+    ) -> list[Message]:
+        """The most recent turns, oldest-first, for context construction.
+
+        Excludes the just-persisted current user message (identified by
+        position) so it is not replayed twice — once as history and once as the
+        current turn. `status` is filtered to completed/cancelled so a failed or
+        in-flight assistant placeholder never becomes model context.
+        """
+        conditions = [
+            Message.conversation_id == conversation_id,
+            Message.status.in_(("completed", "cancelled")),
+        ]
+        if exclude_position is not None:
+            conditions.append(Message.position != exclude_position)
+        rows = self.session.scalars(
+            select(Message)
+            .where(*conditions)
+            .order_by(Message.position.desc())
+            .limit(limit)
+        ).all()
+        return list(reversed(rows))
+
+    def find_by_idempotency_key(
+        self, conversation_id: str, idempotency_key: str
+    ) -> Message | None:
+        """The assistant turn previously produced for this key, if any."""
+        return self.session.scalars(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.idempotency_key == idempotency_key,
+                Message.role == "assistant",
+            )
+            .order_by(Message.position.desc())
+            .limit(1)
+        ).first()
+
     def add(self, message: Message) -> Message:
         self.session.add(message)
         self.session.flush()
         return message
+
+
+class AIUsageRepository:
+    """Persistence for the AI usage ledger.
+
+    Append-only by design: a usage row is never updated after the request it
+    describes finishes, so the ledger cannot be rewritten to hide spend.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def add(self, event: AIUsageEvent) -> AIUsageEvent:
+        self.session.add(event)
+        self.session.flush()
+        return event
+
+    def summary(
+        self, *, user_id: str | None = None, since: datetime | None = None
+    ) -> dict[str, int | float | None]:
+        """Aggregate counters for the usage surface.
+
+        `user_id` scopes the window to one account (the self-service view);
+        omitting it aggregates the whole platform (the admin view). Token and
+        cost sums are `None` rather than 0 when no row carried a value, so
+        "we have no data" is not reported as "we spent nothing".
+        """
+        conditions = []
+        if user_id is not None:
+            conditions.append(AIUsageEvent.user_id == user_id)
+        if since is not None:
+            conditions.append(AIUsageEvent.request_started_at >= since)
+
+        def count(*extra) -> int:
+            return int(
+                self.session.scalar(
+                    select(func.count())
+                    .select_from(AIUsageEvent)
+                    .where(*conditions, *extra)
+                )
+                or 0
+            )
+
+        def total(column) -> int | None:
+            value = self.session.scalar(
+                select(func.sum(column)).select_from(AIUsageEvent).where(*conditions)
+            )
+            return None if value is None else int(value)
+
+        def total_float(column) -> float | None:
+            value = self.session.scalar(
+                select(func.sum(column)).select_from(AIUsageEvent).where(*conditions)
+            )
+            return None if value is None else float(value)
+
+        latency = self.session.scalar(
+            select(func.avg(AIUsageEvent.latency_ms))
+            .select_from(AIUsageEvent)
+            .where(*conditions)
+        )
+
+        return {
+            "total_requests": count(),
+            "completed_requests": count(AIUsageEvent.status == "completed"),
+            "failed_requests": count(AIUsageEvent.status == "failed"),
+            "cancelled_requests": count(AIUsageEvent.status == "cancelled"),
+            "input_tokens": total(AIUsageEvent.input_tokens),
+            "output_tokens": total(AIUsageEvent.output_tokens),
+            "total_tokens": total(AIUsageEvent.total_tokens),
+            "average_latency_ms": None if latency is None else int(latency),
+            "estimated_cost": total_float(AIUsageEvent.estimated_cost),
+        }

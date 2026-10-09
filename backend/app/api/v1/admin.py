@@ -32,6 +32,7 @@ from app.db import supabase
 from app.db.base import utcnow
 from app.models import (
     EVENT_LOGOUT,
+    AIUsageEvent,
     AuthEvent,
     AuthSession,
     Conversation,
@@ -39,7 +40,9 @@ from app.models import (
     Message,
     User,
 )
+from app.schemas.ai import AIUsageSummary
 from app.schemas.auth import (
+    AdminAIUsage,
     AdminEventFeed,
     AdminSystemHealth,
     AdminUsage,
@@ -49,6 +52,7 @@ from app.schemas.auth import (
     UsageBucket,
 )
 from app.schemas.common import Page
+from app.services.ai import AIService
 
 logger = get_logger(__name__)
 
@@ -296,6 +300,47 @@ def events(
 
 
 @router.get(
+    "/ai-usage",
+    response_model=AdminAIUsage,
+    summary="Platform-wide AI usage and cost",
+)
+def ai_usage(
+    db: DbSession,
+    _: AdminUser,
+    window_days: int | None = Query(
+        default=30, ge=1, le=365, description="Rolling window in days; omit for all time."
+    ),
+) -> AdminAIUsage:
+    """Aggregate model usage across the platform.
+
+    Counts, tokens and latency only — never conversation content. This is the
+    foundation the Step 10 dashboard builds on, and it is deliberately aggregate
+    so it does not become a way to read private threads.
+    """
+    service = AIService(db)
+    summary = service.usage_summary(user_id=None, window_days=window_days)
+    models = dict(
+        db.execute(
+            select(AIUsageEvent.model, func.count(AIUsageEvent.id)).group_by(
+                AIUsageEvent.model
+            )
+        ).all()
+    )
+    providers = dict(
+        db.execute(
+            select(AIUsageEvent.provider, func.count(AIUsageEvent.id)).group_by(
+                AIUsageEvent.provider
+            )
+        ).all()
+    )
+    return AdminAIUsage(
+        summary=summary,
+        models_by_use={str(k): int(v) for k, v in models.items()},
+        providers_by_use={str(k): int(v) for k, v in providers.items()},
+    )
+
+
+@router.get(
     "/system-health",
     response_model=AdminSystemHealth,
     summary="Deployment and authentication health",
@@ -323,6 +368,9 @@ def system_health(db: DbSession, _: AdminUser) -> AdminSystemHealth:
         database_dialect=settings.DATABASE_URL.split("://", 1)[0],
         supabase=supabase.probe(),
         ai_provider=settings.AI_PROVIDER,
+        ai_model=settings.ai_model_resolved or None,
+        ai_configured=settings.ai_configured,
+        ai_streaming_enabled=settings.AI_STREAMING_ENABLED,
         auth_secret_configured=bool(settings.AUTH_SECRET),
         cookie_secure=settings.is_cookie_secure,
         cookie_samesite=settings.cookie_samesite,

@@ -13,6 +13,7 @@
      invalidate its own rotating token. */
 
 import type {
+  AdminAIUsage,
   AdminEventFeed,
   AdminPage,
   AdminSystemHealth,
@@ -231,6 +232,8 @@ interface RequestOptions {
   query?: Record<string, string | number | boolean | undefined | null>;
 }
 
+export type { RequestOptions };
+
 /* Single-flight refresh. Concurrent 401s await the same promise instead of
    each starting a rotation, which would revoke the token the others hold. */
 let refreshInFlight: Promise<boolean> | null = null;
@@ -288,7 +291,7 @@ async function performRefresh(): Promise<boolean> {
   }
 }
 
-function csrfHeader(): Record<string, string> {
+export function csrfHeader(): Record<string, string> {
   const token = readCsrfCookie();
   return token ? { [CSRF_HEADER]: token } : {};
 }
@@ -302,7 +305,7 @@ export async function refreshSession(): Promise<boolean> {
   return refreshInFlight;
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = (options.method ?? 'GET').toUpperCase();
 
   const send = async (): Promise<Response> => {
@@ -462,6 +465,10 @@ export const adminApi = {
 
   usage(): Promise<AdminUsage> {
     return request<AdminUsage>('/admin/usage');
+  },
+
+  aiUsage(windowDays = 30): Promise<AdminAIUsage> {
+    return request<AdminAIUsage>('/admin/ai-usage', { query: { windowDays } });
   },
 
   events(params: { eventType?: string; outcome?: string; limit?: number; offset?: number } = {}) {

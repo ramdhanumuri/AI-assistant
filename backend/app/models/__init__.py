@@ -5,7 +5,7 @@ Alembic autogenerate and `create_all()` both depend on. Keep the imports
 explicit — a missing entry silently drops a table from migrations.
 """
 
-from app.models.conversation import Conversation, Message
+from app.models.conversation import AIUsageEvent, Conversation, Message
 from app.models.knowledge import KnowledgeSource
 from app.models.memory import MemoryRecord
 from app.models.mode import AIMode
@@ -46,6 +46,7 @@ from app.models.user import (
 )
 
 __all__ = [
+    "AIUsageEvent",
     "AIMode",
     "ActivityEvent",
     "AuthEvent",

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronDown, Cpu, Quote, Volume2, Wrench } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Cpu, Quote, RotateCcw, Volume2, Wrench } from 'lucide-react';
 import { useState } from 'react';
 import type { Message as MessageType, ToolTrace } from '@/types';
 import { MODE_BY_ID } from '@/data/mock';
@@ -12,6 +12,7 @@ interface MessageProps {
   reasoning?: string;
   traces?: ToolTrace[];
   onSuggestion?: (text: string) => void;
+  onRetry?: (messageId: string) => void;
   isLast?: boolean;
 }
 
@@ -21,11 +22,15 @@ export function Message({
   reasoning,
   traces,
   onSuggestion,
+  onRetry,
 }: MessageProps) {
   const mode = MODE_BY_ID[message.mode];
   const isUser = message.role === 'user';
 
   if (isUser) return <UserMessage message={message} />;
+
+  const streaming = message.status === 'streaming';
+  const failed = message.status === 'failed' || message.status === 'cancelled';
 
   return (
     <motion.article
@@ -69,6 +74,30 @@ export function Message({
                 {message.tokens} tok
               </span>
             ) : null}
+            {message.model ? (
+              <span className="font-mono text-3xs uppercase tracking-widest2 text-platinum-dim/40">
+                {message.model}
+              </span>
+            ) : null}
+            {message.latencyMs ? (
+              <span className="font-mono text-3xs uppercase tracking-widest2 text-platinum-dim/40">
+                {(message.latencyMs / 1000).toFixed(1)}s
+              </span>
+            ) : null}
+            {streaming && (
+              <span
+                className="flex items-center gap-1.5 font-mono text-3xs uppercase tracking-widest2"
+                style={{ color: rgba(mode.aura, 0.85) }}
+              >
+                <motion.span
+                  className="h-1.5 w-1.5 rounded-full"
+                  style={{ background: rgba(mode.aura, 0.9) }}
+                  animate={{ opacity: [0.3, 1, 0.3] }}
+                  transition={{ duration: 1.2, repeat: Infinity }}
+                />
+                Streaming
+              </span>
+            )}
             {message.voice && (
               <span className="flex items-center gap-1.5 font-mono text-3xs uppercase tracking-widest2 text-champagne/70">
                 <Volume2 className="h-3 w-3" />
@@ -97,10 +126,47 @@ export function Message({
                 onSuggestion={onSuggestion}
               />
             ))}
+            {streaming && message.blocks.length > 0 && (
+              <span
+                aria-hidden
+                className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[2px] animate-pulse rounded-full"
+                style={{ background: rgba(mode.aura, 0.9) }}
+              />
+            )}
           </div>
 
+          {/* A failed or cancelled generation is stated plainly and offered a
+              retry, rather than leaving a truncated answer looking final. */}
+          {failed && (
+            <div
+              role="status"
+              className="mt-5 flex flex-wrap items-center gap-3 rounded-xl border px-3.5 py-2.5"
+              style={{
+                borderColor: rgba('226 132 132', 0.28),
+                background: rgba('226 132 132', 0.05),
+              }}
+            >
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" style={{ color: rgba('226 132 132', 0.9) }} />
+              <span className="flex-1 text-[12.5px] text-platinum-soft/80">
+                {message.status === 'cancelled'
+                  ? 'Generation stopped.'
+                  : 'This response did not finish.'}
+              </span>
+              {onRetry && message.failedPrompt && (
+                <button
+                  type="button"
+                  onClick={() => onRetry(message.id)}
+                  className="flex items-center gap-1.5 rounded-lg border border-white/[0.1] px-2.5 py-1 font-mono text-3xs uppercase tracking-widest2 text-platinum-dim transition-colors hover:bg-white/[0.05] hover:text-platinum"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Retry
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Response footer actions */}
-          {message.blocks.length > 0 && (
+          {message.blocks.length > 0 && !streaming && !failed && (
             <div className="mt-6 flex items-center gap-1 opacity-0 transition-opacity duration-500 group-hover/msg:opacity-100 focus-within:opacity-100">
               <FooterAction label="Copy" icon={Quote} />
               <FooterAction label="Speak" icon={Volume2} />

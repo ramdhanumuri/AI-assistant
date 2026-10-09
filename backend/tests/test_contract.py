@@ -36,6 +36,10 @@ EXPECTED_PATHS = {
     ("get", "/api/v1/memory"),
     ("post", "/api/v1/memory"),
     ("delete", "/api/v1/memory/{memory_id}"),
+    # STEP 6 AI surface.
+    ("get", "/api/v1/ai/capabilities"),
+    ("get", "/api/v1/ai/usage"),
+    ("post", "/api/v1/ai/conversations/{conversation_id}/messages/stream"),
     # MODULE 4 surface.
     ("post", "/api/v1/auth/register"),
     ("post", "/api/v1/auth/login"),
@@ -48,6 +52,7 @@ EXPECTED_PATHS = {
     ("get", "/api/v1/users/me"),
     ("get", "/api/v1/admin/users"),
     ("get", "/api/v1/admin/usage"),
+    ("get", "/api/v1/admin/ai-usage"),
     ("get", "/api/v1/admin/events"),
     ("get", "/api/v1/admin/system-health"),
 }
@@ -68,6 +73,8 @@ EXPECTED_TABLES = {
     "auth_sessions",
     "password_reset_tokens",
     "auth_events",
+    # STEP 6 AI usage ledger.
+    "ai_usage_events",
 }
 
 
