@@ -207,7 +207,14 @@ class TestEngineSeam:
         engine = get_engine()
         assert isinstance(engine, Engine)
         assert engine.name == "simulator"
-        assert list_providers() == ["simulator"]
+        # STEP 6 registers real providers beside the simulator. The assertion
+        # is updated deliberately: the point of the test is that the configured
+        # provider resolves to a working engine, and that the registry is the
+        # one place provider names live — not that the simulator is the only
+        # provider that will ever exist.
+        providers = list_providers()
+        assert "simulator" in providers
+        assert {"openai"} <= set(providers)
 
     def test_unknown_provider_fails_loudly(self, monkeypatch) -> None:
         from app.core.errors import ServiceUnavailableError

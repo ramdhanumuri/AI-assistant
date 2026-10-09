@@ -27,6 +27,7 @@ from app.core.security_events import log_security_event
 from app.db.session import get_db
 from app.models import EVENT_AUTHZ_DENIED, EVENT_RATE_LIMITED, ROLE_ADMIN, User
 from app.api.cookies import read_access_token
+from app.services.ai import AIService
 from app.services.auth import AuthService, ClientContext
 from app.services.catalog import CatalogService
 from app.services.conversations import ConversationService
@@ -65,9 +66,14 @@ def get_auth_service(db: DbSession) -> AuthService:
     return AuthService(db)
 
 
+def get_ai_service(db: DbSession) -> AIService:
+    return AIService(db)
+
+
 ConversationServiceDep = Annotated[ConversationService, Depends(get_conversation_service)]
 CatalogServiceDep = Annotated[CatalogService, Depends(get_catalog_service)]
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+AIServiceDep = Annotated[AIService, Depends(get_ai_service)]
 
 
 @dataclass(frozen=True)

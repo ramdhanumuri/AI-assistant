@@ -6,9 +6,10 @@ Later modules extend this file rather than introducing a second config path.
 """
 
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # A signing key must be long enough that guessing it is infeasible. 32 bytes
 # (256 bits) is the floor for HS256; anything shorter is rejected at startup.
@@ -46,7 +47,10 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     DEBUG: bool = True
     API_V1_PREFIX: str = "/api/v1"
-    CORS_ORIGINS: list[str] = [
+    # Comma-separated in the environment; split by the validator below.
+    # `NoDecode` keeps pydantic-settings from JSON-decoding a `list[str]` env
+    # value before the validator runs, so `a,b` parses as documented.
+    CORS_ORIGINS: Annotated[list[str], NoDecode] = [
         "http://localhost:12000",
         "http://127.0.0.1:12000",
     ]
@@ -145,16 +149,104 @@ class Settings(BaseSettings):
     SUPABASE_ANON_KEY: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
 
-    # Model layer (seam resolved in MODULE 6)
+    # ── Model layer (STEP 6) ──────────────────────────────────────────
+    # `simulator` is the deterministic offline engine used by tests and local
+    # development. A real provider (`openai`, or any OpenAI-compatible
+    # endpoint) is selected here and never from the client.
     AI_PROVIDER: str = "simulator"
-    AI_MODEL: str = ""
+    # Credentials live only in the process environment. They are never
+    # serialised into a response, a log line or the frontend bundle.
     AI_PROVIDER_API_KEY: str = ""
+    # Override for OpenAI-compatible gateways (Azure, vLLM, OpenRouter, …).
+    # Empty ⇒ the provider's official default endpoint.
+    AI_BASE_URL: str = ""
+    AI_MODEL: str = ""
+    AI_DEFAULT_MODEL: str = ""
+    # Comma-separated in the environment; split by the validator below.
+    # `NoDecode` is required: pydantic-settings otherwise tries to JSON-decode a
+    # `list[str]` env value *before* field validators run, so the documented
+    # `AI_ALLOWED_MODELS=a,b` form would fail to parse at boot.
+    AI_ALLOWED_MODELS: Annotated[list[str], NoDecode] = []
+    # Every provider call is bounded; nothing is allowed to hang forever.
+    AI_TIMEOUT_SECONDS: float = 60.0
+    AI_MAX_OUTPUT_TOKENS: int = 1024
+    # Budget for the prompt assembled from system + history + current turn.
+    AI_MAX_INPUT_TOKENS: int = 8192
+    AI_TEMPERATURE: float = 0.7
+    AI_TOP_P: float = 1.0
+    AI_STREAMING_ENABLED: bool = True
+    # How many prior messages (user + assistant) may be replayed as context.
+    AI_MAX_CONTEXT_MESSAGES: int = 20
+    # Retries are only ever applied to transient failures (see app/ai/base.py).
+    AI_MAX_RETRIES: int = 2
+    AI_RETRY_BACKOFF_SECONDS: float = 0.5
+    # Optional operator override of the system prompt. Kept server-side.
+    AI_SYSTEM_PROMPT: str = ""
+    # Title generation is an optional side task; it must never block the reply.
+    AI_TITLE_GENERATION_ENABLED: bool = True
+    AI_TITLE_MAX_TOKENS: int = 24
+    # Cost foundation. Left at zero unless a deployment knows its real pricing;
+    # a zero price means "cost not recorded", never a fabricated number.
+    AI_INPUT_COST_PER_MILLION: float = 0.0
+    AI_OUTPUT_COST_PER_MILLION: float = 0.0
+    AI_COST_CURRENCY: str = "USD"
+    AI_PRICING_VERSION: str = ""
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
         if isinstance(value, str):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
+
+    @field_validator("AI_ALLOWED_MODELS", mode="before")
+    @classmethod
+    def _split_models(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [model.strip() for model in value.split(",") if model.strip()]
+        return value
+
+    @field_validator("AI_TEMPERATURE")
+    @classmethod
+    def _temperature_range(cls, value: float) -> float:
+        # Rejected at boot rather than per request: a nonsensical value is a
+        # deployment mistake, and failing fast beats a provider 400 storm.
+        if not 0.0 <= value <= 2.0:
+            raise ValueError("AI_TEMPERATURE must be between 0 and 2")
+        return value
+
+    @field_validator("AI_TOP_P")
+    @classmethod
+    def _top_p_range(cls, value: float) -> float:
+        if not 0.0 < value <= 1.0:
+            raise ValueError("AI_TOP_P must be greater than 0 and at most 1")
+        return value
+
+    @field_validator(
+        "AI_MAX_OUTPUT_TOKENS",
+        "AI_MAX_INPUT_TOKENS",
+        "AI_MAX_CONTEXT_MESSAGES",
+        "AI_TITLE_MAX_TOKENS",
+    )
+    @classmethod
+    def _positive_budget(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("token and context budgets must be at least 1")
+        return value
+
+    @field_validator("AI_MAX_RETRIES")
+    @classmethod
+    def _retry_bounds(cls, value: int) -> int:
+        # Bounded so a misconfiguration cannot become a retry storm.
+        if not 0 <= value <= 5:
+            raise ValueError("AI_MAX_RETRIES must be between 0 and 5")
+        return value
+
+    @field_validator("AI_TIMEOUT_SECONDS", "AI_RETRY_BACKOFF_SECONDS")
+    @classmethod
+    def _positive_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("timeouts and backoff must be positive")
         return value
 
     @field_validator("COOKIE_SAMESITE")
@@ -257,6 +349,38 @@ class Settings(BaseSettings):
     def is_supabase_configured(self) -> bool:
         """True when the REST/Realtime layer has enough config to be used."""
         return bool(self.SUPABASE_URL and self.SUPABASE_ANON_KEY)
+
+    @property
+    def ai_model_resolved(self) -> str:
+        """The model the server will use, resolved in one place.
+
+        Precedence: an explicit `AI_MODEL`, then `AI_DEFAULT_MODEL`, then the
+        first allow-listed model. An empty result means the provider itself
+        decides — and a real provider treats that as a configuration error.
+        """
+        for candidate in (self.AI_MODEL, self.AI_DEFAULT_MODEL):
+            if candidate.strip():
+                return candidate.strip()
+        return self.AI_ALLOWED_MODELS[0] if self.AI_ALLOWED_MODELS else ""
+
+    @property
+    def ai_allowed_models(self) -> list[str]:
+        """Models the server will accept. The client never widens this set."""
+        models = list(self.AI_ALLOWED_MODELS)
+        resolved = self.ai_model_resolved
+        if resolved and resolved not in models:
+            models.insert(0, resolved)
+        return models
+
+    @property
+    def ai_configured(self) -> bool:
+        """Whether the configured provider has everything it needs to run.
+
+        Used to answer health questions without ever revealing the key itself.
+        """
+        if self.AI_PROVIDER.strip().lower() in {"simulator", "local"}:
+            return True
+        return bool(self.AI_PROVIDER_API_KEY.strip())
 
 
 @lru_cache

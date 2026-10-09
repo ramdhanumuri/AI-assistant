@@ -16,6 +16,7 @@ from __future__ import annotations
 from pydantic import EmailStr, Field, field_validator, model_validator
 
 from app.core.security import PASSWORD_MAX_LENGTH, validate_password_strength
+from app.schemas.ai import AIUsageSummary
 from app.schemas.common import APIModel, EpochMillis, ORMModel
 
 MAX_FULL_NAME = 120
@@ -308,6 +309,19 @@ class AdminEventFeed(APIModel):
     counts_by_type: dict[str, int]
 
 
+class AdminAIUsage(APIModel):
+    """Platform-wide AI usage (STEP 6).
+
+    Aggregate only: model/provider counts and the token/latency summary. It
+    carries no message content and no per-conversation breakdown, so an
+    administrator can see load and cost without reading private threads.
+    """
+
+    summary: AIUsageSummary
+    models_by_use: dict[str, int] = Field(default_factory=dict)
+    providers_by_use: dict[str, int] = Field(default_factory=dict)
+
+
 class AdminSystemHealth(APIModel):
     status: str
     environment: str
@@ -316,6 +330,11 @@ class AdminSystemHealth(APIModel):
     database_dialect: str
     supabase: str
     ai_provider: str
+    # STEP 6: capability, never credentials. `ai_configured` says whether the
+    # provider has what it needs; the key and base URL are never included.
+    ai_model: str | None = None
+    ai_configured: bool = False
+    ai_streaming_enabled: bool = True
     auth_secret_configured: bool
     cookie_secure: bool
     cookie_samesite: str
@@ -327,6 +346,7 @@ class AdminSystemHealth(APIModel):
 
 
 __all__ = [
+    "AdminAIUsage",
     "AdminEventFeed",
     "AdminSystemHealth",
     "AdminUsage",

@@ -108,7 +108,24 @@ export interface Message {
   reasoning?: string;
   traces?: ToolTrace[];
   tokens?: number;
+  /* ── STEP 6 AI provenance ─────────────────────────────────────────
+     `status` distinguishes a completed answer from one that failed or was
+     cancelled mid-stream, so the UI can offer a retry instead of presenting a
+     truncated answer as final. The remaining fields are null when the provider
+     did not report them — the UI must render nothing, not a zero. */
+  status?: MessageStatus;
+  model?: string | null;
+  provider?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens?: number | null;
+  latencyMs?: number | null;
+  errorCode?: string | null;
+  /* Local-only: a generation that failed and can be retried from the UI. */
+  failedPrompt?: string;
 }
+
+export type MessageStatus = 'streaming' | 'completed' | 'failed' | 'cancelled';
 
 export interface Conversation {
   id: string;

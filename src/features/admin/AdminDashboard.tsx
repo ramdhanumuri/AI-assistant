@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Activity,
+  Cpu,
   Database,
   Loader2,
   RefreshCw,
@@ -19,6 +20,7 @@ import {
 } from 'lucide-react';
 import { adminApi, errorMessage } from '@/lib/api';
 import type {
+  AdminAIUsage,
   AdminEvent,
   AdminPage,
   AdminSystemHealth,
@@ -53,6 +55,7 @@ export function AdminDashboard() {
       </header>
 
       <UsagePanel />
+      <AIUsagePanel />
       <SystemHealthPanel />
       <AccountsPanel />
       <EventFeedPanel />
@@ -159,6 +162,114 @@ function UsagePanel() {
               </div>
             </div>
           )}
+        </>
+      )}
+    </GlassCard>
+  );
+}
+
+/* ── AI usage (STEP 6) ───────────────────────────────────────────── */
+
+function AIUsagePanel() {
+  const [data, setData] = useState<AdminAIUsage | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setData(await adminApi.aiUsage(30));
+      setError(null);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const summary = data?.summary;
+  const tiles = useMemo(
+    () =>
+      summary
+        ? [
+            { label: 'AI requests · 30d', value: summary.totalRequests.toLocaleString() },
+            { label: 'Completed', value: summary.completedRequests.toLocaleString() },
+            { label: 'Failed', value: summary.failedRequests.toLocaleString() },
+            { label: 'Cancelled', value: summary.cancelledRequests.toLocaleString() },
+            {
+              label: 'Tokens',
+              /* `null` means no provider reported usage — never render it as 0. */
+              value: summary.totalTokens == null ? '—' : summary.totalTokens.toLocaleString(),
+            },
+            {
+              label: 'Avg latency',
+              value:
+                summary.averageLatencyMs == null
+                  ? '—'
+                  : `${(summary.averageLatencyMs / 1000).toFixed(1)}s`,
+            },
+          ]
+        : [],
+    [summary],
+  );
+
+  return (
+    <GlassCard className="p-6" interactive>
+      <PanelHeading
+        icon={<Cpu className="h-3.5 w-3.5" />}
+        title="AI usage"
+        onRefresh={load}
+      />
+
+      {error && (
+        <div className="mt-5">
+          <FormAlert tone="error">{error}</FormAlert>
+        </div>
+      )}
+
+      {!data && !error && <Loading label="Loading AI usage…" />}
+
+      {data && (
+        <>
+          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {tiles.map((tile) => (
+              <motion.div
+                key={tile.label}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-3.5"
+              >
+                <div className="font-mono text-3xs uppercase tracking-widest2 text-platinum-dim">
+                  {tile.label}
+                </div>
+                <div className="mt-1.5 text-[1.35rem] font-extralight text-platinum">
+                  {tile.value}
+                </div>
+              </motion.div>
+            ))}
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-2">
+            {Object.entries(data.providersByUse).map(([provider, count]) => (
+              <span
+                key={provider}
+                className="rounded-full border border-white/[0.09] bg-white/[0.03] px-3 py-1 font-mono text-3xs uppercase tracking-widest2 text-platinum-dim"
+              >
+                {provider} · {count}
+              </span>
+            ))}
+            {Object.entries(data.modelsByUse).map(([model, count]) => (
+              <span
+                key={model}
+                className="rounded-full border border-champagne/20 bg-champagne/[0.05] px-3 py-1 font-mono text-3xs uppercase tracking-widest2 text-champagne"
+              >
+                {model} · {count}
+              </span>
+            ))}
+          </div>
+          <p className="mt-4 text-[12px] leading-relaxed text-platinum-dim/70">
+            Aggregate counts only. Conversation content is never included here.
+          </p>
         </>
       )}
     </GlassCard>

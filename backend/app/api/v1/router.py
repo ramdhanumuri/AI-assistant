@@ -15,6 +15,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     admin,
+    ai,
     auth,
     catalog,
     conversations,
@@ -41,5 +42,7 @@ api_router.include_router(catalog.projects_router)
 api_router.include_router(catalog.knowledge_router)
 api_router.include_router(catalog.tools_router)
 api_router.include_router(catalog.memory_router)
+# STEP 6: the real AI surface (capabilities, streaming chat, usage).
+api_router.include_router(ai.router)
 # Administrator-only.
 api_router.include_router(admin.router)

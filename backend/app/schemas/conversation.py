@@ -83,6 +83,19 @@ class MessageRead(ORMModel):
     voice: bool
     tokens: int | None = None
     created_at: EpochMillis
+    # ── AI provenance (STEP 6) ────────────────────────────────────────
+    # `status` is what lets the UI distinguish a completed answer from one that
+    # failed or was cancelled mid-stream. The token/latency fields are nullable
+    # because a provider may not report them; the UI renders nothing rather
+    # than a misleading zero.
+    status: str = "completed"
+    model: str | None = None
+    provider: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
+    latency_ms: int | None = None
+    error_code: str | None = None
 
 
 class MessageCreate(APIModel):
@@ -91,6 +104,14 @@ class MessageCreate(APIModel):
     body: str = Field(min_length=1, max_length=20_000)
     mode: str | None = Field(default=None, validation_alias=_MODE_ALIAS)
     voice: bool = False
+    # Optional server-validated model selection. A value outside the allow-list
+    # is rejected rather than silently replaced.
+    model: str | None = Field(default=None, max_length=128)
+    # Optional idempotency key so a client retry after an ambiguous network
+    # failure does not generate a second, duplicate answer.
+    idempotency_key: str | None = Field(
+        default=None, min_length=8, max_length=80, pattern=r"^[A-Za-z0-9._:-]+$"
+    )
 
     @field_validator("mode")
     @classmethod
@@ -106,3 +127,50 @@ class TurnResult(APIModel):
     user_message: MessageRead
     assistant_message: MessageRead
     conversation: ConversationRead
+
+
+# ── STEP 6 streaming (SSE) payloads ───────────────────────────────────
+# These are the frames emitted on `POST /conversations/{id}/messages/stream`.
+# They are provider-independent: the browser never learns which vendor answered
+# beyond the model name the server chooses to report.
+
+
+class StreamMeta(APIModel):
+    """First frame: what the server is about to do."""
+
+    conversation_id: str
+    user_message: MessageRead
+    # The persisted assistant placeholder. The UI swaps its optimistic ids for
+    # these, so a later reload and the live session refer to the same rows.
+    assistant_message: MessageRead
+    model: str
+    provider: str
+    # True when this key matched an existing turn and no generation was run.
+    replayed: bool = False
+
+
+class StreamDelta(APIModel):
+    """Incremental assistant text. `text` is a delta, never accumulated."""
+
+    text: str
+
+
+class StreamDone(APIModel):
+    """Terminal success frame, carrying the persisted assistant message."""
+
+    assistant_message: MessageRead
+    conversation: ConversationRead
+
+
+class StreamError(APIModel):
+    """Terminal failure frame.
+
+    `code` is from the closed AI error vocabulary; `message` is safe to render.
+    The partial assistant message (if any) is included so the UI can show what
+    was produced before the failure rather than discarding it.
+    """
+
+    code: str
+    message: str
+    retryable: bool
+    assistant_message: MessageRead | None = None

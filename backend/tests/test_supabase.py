@@ -159,9 +159,9 @@ class TestSQLMigrations:
     def test_schema_migration_creates_every_orm_table(self) -> None:
         """Every ORM table must be created by some migration file.
 
-        The set is split across 0001 (MODULE 2 core) and 0003 (MODULE 4
-        identity), so the check is "present in the concatenated schema" rather
-        than "present in 0001".
+        The set is split across 0001 (MODULE 2 core), 0003 (MODULE 4 identity)
+        and 0005 (STEP 6 AI integration), so the check is "present in the
+        concatenated schema" rather than "present in 0001".
         """
         from pathlib import Path
 
@@ -172,7 +172,7 @@ class TestSQLMigrations:
         )
         schema_sql = "\n".join(
             path.read_text(encoding="utf-8")
-            for path in sorted(migrations_dir.glob("000[13]*.sql"))
+            for path in sorted(migrations_dir.glob("000[135]*.sql"))
         )
 
         import app.models  # noqa: F401  (register mappers)

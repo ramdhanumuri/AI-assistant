@@ -20,6 +20,8 @@ export function ChatInterface() {
     traces,
     isStreaming,
     sendMessage,
+    retryMessage,
+    aiCapabilities,
     activeConversationId,
     conversations,
     settings,
@@ -56,10 +58,23 @@ export function ChatInterface() {
   };
 
   const isEmpty = messages.length === 0 && !isStreaming;
+  // A provider that is selected but not configured is surfaced before the user
+  // types, rather than letting the first send fail at the model.
+  const unconfigured = aiCapabilities != null && !aiCapabilities.configured;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       {settings.particles && <ParticleField aura={active.aura} count={26} />}
+
+      {unconfigured && (
+        <div className="relative z-10 mx-5 mt-2 rounded-xl border border-amber-300/20 bg-amber-300/[0.04] px-4 py-2.5 lg:mx-10">
+          <p className="text-[12.5px] text-platinum-soft/80">
+            The AI provider ({aiCapabilities?.provider}) is not configured on this
+            deployment. An administrator must set its API key before messages can be
+            answered.
+          </p>
+        </div>
+      )}
 
       {/* Thread header */}
       <div className="relative z-10 shrink-0 px-5 pt-1 pb-4 lg:px-10">
@@ -190,6 +205,7 @@ export function ChatInterface() {
                       traces={isStreamingTurn ? traces : undefined}
                       showTrace={isStreamingTurn && m.blocks.length === 0}
                       onSuggestion={sendMessage}
+                      onRetry={retryMessage}
                       isLast={i === messages.length - 1}
                     />
                   );

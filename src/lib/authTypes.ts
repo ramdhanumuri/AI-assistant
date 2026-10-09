@@ -96,6 +96,27 @@ export interface AdminUsage {
   usage: AdminUsageBucket[];
 }
 
+/* STEP 6: platform-wide AI usage. Aggregate only — never message content. */
+export interface AdminAIUsageSummary {
+  totalRequests: number;
+  completedRequests: number;
+  failedRequests: number;
+  cancelledRequests: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  averageLatencyMs: number | null;
+  estimatedCost: number | null;
+  currency: string | null;
+  windowDays: number | null;
+}
+
+export interface AdminAIUsage {
+  summary: AdminAIUsageSummary;
+  modelsByUse: Record<string, number>;
+  providersByUse: Record<string, number>;
+}
+
 export interface AdminEvent {
   id: number;
   eventType: string;
